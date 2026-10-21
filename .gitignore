@@ -1,0 +1,3 @@
+# Icarus simulation binaries and generated waveforms.
+*.v.out
+*.vcd
