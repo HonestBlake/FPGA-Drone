@@ -4,7 +4,8 @@
 module ImuEstimator #(
     parameter integer CLK_FREQ = 100_000_000,
     parameter integer CALIBRATION_SAMPLES = 256,
-    parameter integer TIMEOUT_MS = 100
+    parameter integer TIMEOUT_MS = 100,
+    parameter integer RECOVERY_ENABLED = 0
 ) (
     input wire clk, rst, raw_valid, sensor_ready, sensor_fault,
     input wire signed [15:0] accel_x, accel_y, accel_z,
@@ -12,7 +13,9 @@ module ImuEstimator #(
     output reg sample_valid, calibrated, fault,
     output wire valid,
     output reg signed [15:0] roll_cd, pitch_cd,
-    output reg signed [15:0] roll_rate_cdps, pitch_rate_cdps, yaw_rate_cdps
+    output reg signed [15:0] roll_rate_cdps, pitch_rate_cdps, yaw_rate_cdps,
+    input wire recover_request,
+    output reg [3:0] fault_reason
 );
     localparam integer TIMEOUT_CYCLES = (CLK_FREQ/1000)*TIMEOUT_MS;
     reg [31:0] age;
@@ -22,6 +25,10 @@ module ImuEstimator #(
     integer accel_roll, accel_pitch;
     reg stationary, gravity_ok;
     reg signed [63:0] predicted_roll, predicted_pitch;
+    // Recovery restarts only the estimator. Fresh stationary data and explicit
+    // parent permission are required; full calibration still precedes validity.
+    wire recovery_start = RECOVERY_ENABLED && recover_request && fault &&
+        raw_valid && sensor_ready && !sensor_fault && stationary;
     assign valid = sensor_ready && calibrated && !fault && age < TIMEOUT_CYCLES && !rst;
 
     always @* begin
@@ -54,8 +61,9 @@ module ImuEstimator #(
     end
 
     always @(posedge clk) begin
-        if (rst) begin
+        if (rst || recovery_start) begin
             sample_valid <= 0; calibrated <= 0; fault <= 0; age <= 0;
+            fault_reason <= 0;
             count <= 0; sum_x <= 0; sum_y <= 0; sum_z <= 0;
             bias_x <= 0; bias_y <= 0; bias_z <= 0;
             roll_q16 <= 0; pitch_q16 <= 0; roll_cd <= 0; pitch_cd <= 0;
@@ -63,8 +71,11 @@ module ImuEstimator #(
         end else begin
             sample_valid <= 0;
             if (age < TIMEOUT_CYCLES) age <= age + 1'b1;
-            if (sensor_fault || (calibrated && (!sensor_ready || age >= TIMEOUT_CYCLES))) begin
+            if (!fault && (sensor_fault || (calibrated && (!sensor_ready || age >= TIMEOUT_CYCLES)))) begin
                 fault <= 1; calibrated <= 0;
+                if (sensor_fault) fault_reason <= 6;
+                else if (!sensor_ready) fault_reason <= 7;
+                else fault_reason <= 1;
             end
             if (raw_valid && sensor_ready && !sensor_fault && !fault &&
                 (!calibrated || age < TIMEOUT_CYCLES)) begin
@@ -91,6 +102,13 @@ module ImuEstimator #(
                              predicted_roll > 35*100*64'sd65536 || predicted_roll < -35*100*64'sd65536 ||
                              predicted_pitch > 35*100*64'sd65536 || predicted_pitch < -35*100*64'sd65536) begin
                     fault <= 1; calibrated <= 0;
+                    if (gx >= 32700 || gx <= -32700 || gy >= 32700 || gy <= -32700 ||
+                        gz >= 32700 || gz <= -32700) fault_reason <= 2;
+                    else if (ax >= 32700 || ax <= -32700 || ay >= 32700 || ay <= -32700 ||
+                             az >= 32700 || az <= -32700) fault_reason <= 3;
+                    else if (rx > 32767 || rx < -32768 || ry > 32767 || ry < -32768 ||
+                             rz > 32767 || rz < -32768) fault_reason <= 5;
+                    else fault_reason <= 4;
                 end else begin
                     roll_q16 <= predicted_roll; pitch_q16 <= predicted_pitch;
                     roll_cd <= predicted_roll/65536; pitch_cd <= predicted_pitch/65536;
@@ -102,7 +120,8 @@ module ImuEstimator #(
     end
     // synthesis translate_off
     initial begin
-        if (CLK_FREQ < 1000 || CALIBRATION_SAMPLES < 2 || CALIBRATION_SAMPLES > 4096 ||
+        if ((RECOVERY_ENABLED != 0 && RECOVERY_ENABLED != 1) ||
+            CLK_FREQ < 1000 || CALIBRATION_SAMPLES < 2 || CALIBRATION_SAMPLES > 4096 ||
             TIMEOUT_MS <= 0 || TIMEOUT_CYCLES < 2)
             $fatal(1, "ImuEstimator: invalid timing or calibration count");
     end

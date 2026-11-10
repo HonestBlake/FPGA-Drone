@@ -1,0 +1,856 @@
+`timescale 1ns / 1ps
+
+module imu_spi #(
+    parameter CLK_DIV = 10,
+
+    // Basys 3 = 100 MHz.
+    // Datasheet allows up to 100 ms before register access after power-up.
+    parameter POWERUP_CYCLES = 10_000_000,
+
+    // Gyro startup from sleep can take about 35 ms.
+    parameter WAKE_CYCLES = 3_500_000
+)(
+    input  wire clk,
+    input  wire reset,
+    input  wire start,
+
+    // SPI
+    output reg  spi_cs_n,
+    output reg  spi_sclk,
+    output reg  spi_mosi,
+    input  wire spi_miso,
+
+    // Sensor outputs
+    output reg signed [15:0] accel_x,
+    output reg signed [15:0] accel_y,
+    output reg signed [15:0] accel_z,
+
+    output reg signed [15:0] gyro_x,
+    output reg signed [15:0] gyro_y,
+    output reg signed [15:0] gyro_z,
+
+    // Status
+    output reg data_valid,
+    output reg busy,
+    output reg init_done,
+    output reg imu_detected,
+    output reg error
+);
+
+   
+    // ICM-20948 REGISTER ADDRESSES
+    localparam WHO_AM_I       = 8'h00;
+    localparam USER_CTRL      = 8'h03;
+    localparam PWR_MGMT_1     = 8'h06;
+    localparam ACCEL_XOUT_H   = 8'h2D;
+    localparam REG_BANK_SEL   = 8'h7F;
+
+    // Bank 2 registers
+    localparam GYRO_CONFIG_1  = 8'h01;
+    localparam ACCEL_CONFIG   = 8'h14;
+
+    localparam WHO_EXPECTED   = 8'hEA;
+
+    // CONFIGURATION VALUES
+    // USER_CTRL bit 4 = I2C_IF_DIS
+    localparam USER_CTRL_SPI_ONLY = 8'h10;
+
+    // Wake sensor + CLKSEL = 1
+    localparam PWR_WAKE = 8'h01;
+
+    // Bank 2 => USER_BANK bits = 2'b10
+    localparam BANK_2 = 8'h20;
+
+    // Bank 0
+    localparam BANK_0 = 8'h00;
+
+    // Gyro:
+    // FS = 00 => +/-250 dps
+    // FCHOICE = 1 => DLPF enabled
+    localparam GYRO_CFG = 8'h01;
+
+    // Accelerometer:
+    // FS = 00 => +/-2g
+    // FCHOICE = 1 => DLPF enabled
+    localparam ACCEL_CFG = 8'h01;
+
+    // SPI BYTE ENGINE
+    reg [7:0] tx_byte;
+    reg [7:0] rx_byte;
+    reg [7:0] rx_shift;
+
+    reg       byte_start;
+    reg       byte_busy;
+    reg       byte_done;
+
+    reg [3:0] bit_count;
+    reg [15:0] clk_count;
+
+    // This block transmits/receives ONE SPI byte.
+    //
+    // SPI mode used:
+    // SCLK idle low
+    // MOSI changes while clock low
+    // MISO sampled on rising edge
+   
+
+    always @(posedge clk) begin
+
+        if (reset) begin
+
+            spi_sclk  <= 1'b0;
+            spi_mosi  <= 1'b0;
+
+            byte_busy <= 1'b0;
+            byte_done <= 1'b0;
+
+            bit_count <= 0;
+            clk_count <= 0;
+
+            rx_shift <= 0;
+            rx_byte  <= 0;
+
+        end
+
+        else begin
+
+            // Normally low.
+            // Goes high for one FPGA clock when a byte finishes.
+            byte_done <= 1'b0;
+
+           
+            // Start a new byte
+            if (byte_start && !byte_busy) begin
+
+                byte_busy <= 1'b1;
+
+                spi_sclk <= 1'b0;
+
+                // SPI sends MSB first
+                spi_mosi <= tx_byte[7];
+
+                bit_count <= 0;
+                clk_count <= 0;
+
+                rx_shift <= 0;
+            end
+
+            // Byte currently transferring
+
+            else if (byte_busy) begin
+
+                if (clk_count == CLK_DIV - 1) begin
+
+                    clk_count <= 0;
+
+                   
+                    // Rising SPI edge
+                    if (spi_sclk == 1'b0) begin
+
+                        spi_sclk <= 1'b1;
+
+                        // Sample MISO
+                        rx_shift <= {
+                            rx_shift[6:0],
+                            spi_miso
+                        };
+
+                    end
+
+                   
+                    // Falling SPI edge
+                    else begin
+
+                        spi_sclk <= 1'b0;
+
+                        // Finished 8 bits?
+                        if (bit_count == 7) begin
+
+                            rx_byte <= rx_shift;
+
+                            byte_busy <= 1'b0;
+                            byte_done <= 1'b1;
+
+                            spi_mosi <= 1'b0;
+
+                        end
+
+                        else begin
+
+                            bit_count <= bit_count + 1'b1;
+
+                            // Put next bit on MOSI
+                            spi_mosi <=
+                                tx_byte[6 - bit_count];
+
+                        end
+                    end
+
+                end
+
+                else begin
+                    clk_count <= clk_count + 1'b1;
+                end
+            end
+        end
+    end
+
+    // IMU INITIALIZATION / READ FSM
+
+    localparam ST_POWER_WAIT         = 6'd0;
+
+    localparam ST_USER_CMD           = 6'd1;
+    localparam ST_USER_CMD_WAIT      = 6'd2;
+    localparam ST_USER_DATA          = 6'd3;
+    localparam ST_USER_DATA_WAIT     = 6'd4;
+
+    localparam ST_WHO_CMD            = 6'd5;
+    localparam ST_WHO_CMD_WAIT       = 6'd6;
+    localparam ST_WHO_DATA           = 6'd7;
+    localparam ST_WHO_DATA_WAIT      = 6'd8;
+
+    localparam ST_PWR_CMD            = 6'd9;
+    localparam ST_PWR_CMD_WAIT       = 6'd10;
+    localparam ST_PWR_DATA           = 6'd11;
+    localparam ST_PWR_DATA_WAIT      = 6'd12;
+
+    localparam ST_BANK2_CMD          = 6'd13;
+    localparam ST_BANK2_CMD_WAIT     = 6'd14;
+    localparam ST_BANK2_DATA         = 6'd15;
+    localparam ST_BANK2_DATA_WAIT    = 6'd16;
+
+    localparam ST_GYRO_CMD           = 6'd17;
+    localparam ST_GYRO_CMD_WAIT      = 6'd18;
+    localparam ST_GYRO_DATA          = 6'd19;
+    localparam ST_GYRO_DATA_WAIT     = 6'd20;
+
+    localparam ST_ACCEL_CMD          = 6'd21;
+    localparam ST_ACCEL_CMD_WAIT     = 6'd22;
+    localparam ST_ACCEL_DATA         = 6'd23;
+    localparam ST_ACCEL_DATA_WAIT    = 6'd24;
+
+    localparam ST_BANK0_CMD          = 6'd25;
+    localparam ST_BANK0_CMD_WAIT     = 6'd26;
+    localparam ST_BANK0_DATA         = 6'd27;
+    localparam ST_BANK0_DATA_WAIT    = 6'd28;
+
+    localparam ST_WAKE_WAIT          = 6'd29;
+
+    localparam ST_READY              = 6'd30;
+
+    localparam ST_SENSOR_CMD         = 6'd31;
+    localparam ST_SENSOR_CMD_WAIT    = 6'd32;
+    localparam ST_SENSOR_READ        = 6'd33;
+    localparam ST_SENSOR_READ_WAIT   = 6'd34;
+    localparam ST_FINISH             = 6'd35;
+
+    localparam ST_ERROR              = 6'd36;
+
+
+    reg [5:0] state;
+
+    reg [31:0] wait_counter;
+
+    reg [3:0] byte_count;
+
+    reg [7:0] imu_data [0:11];
+
+    integer i;
+
+    // HIGH LEVEL STATE MACHINE
+
+    always @(posedge clk) begin
+
+        if (reset) begin
+
+            state <= ST_POWER_WAIT;
+
+            spi_cs_n <= 1'b1;
+
+            byte_start <= 1'b0;
+            tx_byte <= 0;
+
+            wait_counter <= 0;
+            byte_count <= 0;
+
+            busy <= 1'b1;
+
+            data_valid <= 1'b0;
+
+            init_done <= 1'b0;
+            imu_detected <= 1'b0;
+            error <= 1'b0;
+
+            accel_x <= 0;
+            accel_y <= 0;
+            accel_z <= 0;
+
+            gyro_x <= 0;
+            gyro_y <= 0;
+            gyro_z <= 0;
+
+            for (i = 0; i < 12; i = i + 1)
+                imu_data[i] <= 0;
+
+        end
+
+        else begin
+
+            // Default values.
+            // These become one-clock pulses when asserted below.
+            byte_start <= 1'b0;
+            data_valid <= 1'b0;
+
+
+            case (state)
+                // WAIT AFTER POWER-UP
+                ST_POWER_WAIT: begin
+
+                    busy <= 1'b1;
+                    spi_cs_n <= 1'b1;
+
+                    if (wait_counter >= POWERUP_CYCLES - 1) begin
+
+                        wait_counter <= 0;
+
+                        spi_cs_n <= 1'b0;
+
+                        state <= ST_USER_CMD;
+
+                    end
+
+                    else begin
+                        wait_counter <= wait_counter + 1'b1;
+                    end
+
+                end
+
+                // USER_CTRL = 0x10
+                // Disable I2C interface, use SPI only
+
+                ST_USER_CMD: begin
+
+                    // Write => bit 7 = 0
+                    tx_byte <= USER_CTRL;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_USER_CMD_WAIT;
+
+                end
+
+
+                ST_USER_CMD_WAIT: begin
+
+                    if (byte_done)
+                        state <= ST_USER_DATA;
+
+                end
+
+
+                ST_USER_DATA: begin
+
+                    tx_byte <= USER_CTRL_SPI_ONLY;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_USER_DATA_WAIT;
+
+                end
+
+
+                ST_USER_DATA_WAIT: begin
+
+                    if (byte_done) begin
+
+                        spi_cs_n <= 1'b1;
+
+                        state <= ST_WHO_CMD;
+
+                    end
+
+                end
+
+                // WHO_AM_I READ
+           
+                ST_WHO_CMD: begin
+
+                    spi_cs_n <= 1'b0;
+
+                    // Read => MSB must be 1
+                    //
+                    // WHO_AM_I = 0x00
+                    //
+                    // 0x00 | 0x80 = 0x80
+
+                    tx_byte <= WHO_AM_I | 8'h80;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_WHO_CMD_WAIT;
+
+                end
+
+
+                ST_WHO_CMD_WAIT: begin
+
+                    if (byte_done)
+                        state <= ST_WHO_DATA;
+
+                end
+
+
+                ST_WHO_DATA: begin
+
+                    // Dummy byte.
+                    // Clock is still needed so IMU can send data.
+                    tx_byte <= 8'h00;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_WHO_DATA_WAIT;
+
+                end
+
+
+                ST_WHO_DATA_WAIT: begin
+
+                    if (byte_done) begin
+
+                        spi_cs_n <= 1'b1;
+
+                        if (rx_byte == WHO_EXPECTED) begin
+
+                            imu_detected <= 1'b1;
+
+                            state <= ST_PWR_CMD;
+
+                        end
+
+                        else begin
+
+                            imu_detected <= 1'b0;
+                            error <= 1'b1;
+
+                            state <= ST_ERROR;
+
+                        end
+
+                    end
+
+                end
+
+                // PWR_MGMT_1
+                //
+                // Write 0x01:
+                // sleep = 0
+                // CLKSEL = 1
+
+                ST_PWR_CMD: begin
+
+                    spi_cs_n <= 1'b0;
+
+                    tx_byte <= PWR_MGMT_1;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_PWR_CMD_WAIT;
+
+                end
+
+
+                ST_PWR_CMD_WAIT: begin
+
+                    if (byte_done)
+                        state <= ST_PWR_DATA;
+
+                end
+
+
+                ST_PWR_DATA: begin
+
+                    tx_byte <= PWR_WAKE;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_PWR_DATA_WAIT;
+
+                end
+
+
+                ST_PWR_DATA_WAIT: begin
+
+                    if (byte_done) begin
+
+                        spi_cs_n <= 1'b1;
+
+                        state <= ST_BANK2_CMD;
+
+                    end
+
+                end
+
+                // SELECT BANK 2
+                // REG_BANK_SEL = 0x20
+
+                ST_BANK2_CMD: begin
+
+                    spi_cs_n <= 1'b0;
+
+                    tx_byte <= REG_BANK_SEL;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_BANK2_CMD_WAIT;
+
+                end
+
+
+                ST_BANK2_CMD_WAIT: begin
+
+                    if (byte_done)
+                        state <= ST_BANK2_DATA;
+
+                end
+
+
+                ST_BANK2_DATA: begin
+
+                    tx_byte <= BANK_2;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_BANK2_DATA_WAIT;
+
+                end
+
+
+                ST_BANK2_DATA_WAIT: begin
+
+                    if (byte_done) begin
+
+                        spi_cs_n <= 1'b1;
+
+                        state <= ST_GYRO_CMD;
+
+                    end
+
+                end
+
+                // GYRO_CONFIG_1
+                // +/-250 degrees/sec
+                // DLPF enabled
+
+                ST_GYRO_CMD: begin
+
+                    spi_cs_n <= 1'b0;
+
+                    tx_byte <= GYRO_CONFIG_1;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_GYRO_CMD_WAIT;
+
+                end
+
+
+                ST_GYRO_CMD_WAIT: begin
+
+                    if (byte_done)
+                        state <= ST_GYRO_DATA;
+
+                end
+
+
+                ST_GYRO_DATA: begin
+
+                    tx_byte <= GYRO_CFG;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_GYRO_DATA_WAIT;
+
+                end
+
+
+                ST_GYRO_DATA_WAIT: begin
+
+                    if (byte_done) begin
+
+                        spi_cs_n <= 1'b1;
+
+                        state <= ST_ACCEL_CMD;
+
+                    end
+
+                end
+
+                // ACCEL_CONFIG
+                // +/-2g
+                // DLPF enabled                
+                ST_ACCEL_CMD: begin
+
+                    spi_cs_n <= 1'b0;
+
+                    tx_byte <= ACCEL_CONFIG;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_ACCEL_CMD_WAIT;
+
+                end
+
+
+                ST_ACCEL_CMD_WAIT: begin
+
+                    if (byte_done)
+                        state <= ST_ACCEL_DATA;
+
+                end
+
+
+                ST_ACCEL_DATA: begin
+
+                    tx_byte <= ACCEL_CFG;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_ACCEL_DATA_WAIT;
+
+                end
+
+
+                ST_ACCEL_DATA_WAIT: begin
+
+                    if (byte_done) begin
+
+                        spi_cs_n <= 1'b1;
+
+                        state <= ST_BANK0_CMD;
+
+                    end
+
+                end
+
+                // RETURN TO BANK 0
+
+                ST_BANK0_CMD: begin
+
+                    spi_cs_n <= 1'b0;
+
+                    tx_byte <= REG_BANK_SEL;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_BANK0_CMD_WAIT;
+
+                end
+
+
+                ST_BANK0_CMD_WAIT: begin
+
+                    if (byte_done)
+                        state <= ST_BANK0_DATA;
+
+                end
+
+
+                ST_BANK0_DATA: begin
+
+                    tx_byte <= BANK_0;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_BANK0_DATA_WAIT;
+
+                end
+
+
+                ST_BANK0_DATA_WAIT: begin
+
+                    if (byte_done) begin
+
+                        spi_cs_n <= 1'b1;
+
+                        wait_counter <= 0;
+
+                        state <= ST_WAKE_WAIT;
+
+                    end
+
+                end
+
+
+                // WAIT FOR SENSOR TO FINISH WAKING UP
+
+                ST_WAKE_WAIT: begin
+
+                    if (wait_counter >= WAKE_CYCLES - 1) begin
+
+                        wait_counter <= 0;
+
+                        init_done <= 1'b1;
+                        busy <= 1'b0;
+
+                        state <= ST_READY;
+
+                    end
+
+                    else begin
+                        wait_counter <= wait_counter + 1'b1;
+                    end
+
+                end
+
+                // INITIALIZATION COMPLETE
+                ST_READY: begin
+
+                    spi_cs_n <= 1'b1;
+
+                    busy <= 1'b0;
+
+                    if (start) begin
+
+                        busy <= 1'b1;
+
+                        byte_count <= 0;
+
+                        spi_cs_n <= 1'b0;
+
+                        state <= ST_SENSOR_CMD;
+
+                    end
+
+                end
+
+
+                // SEND SENSOR READ COMMAND
+                //
+                // ACCEL_XOUT_H = 0x2D
+                // Read bit => 0xAD
+
+                ST_SENSOR_CMD: begin
+
+                    tx_byte <= ACCEL_XOUT_H | 8'h80;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_SENSOR_CMD_WAIT;
+
+                end
+
+
+                ST_SENSOR_CMD_WAIT: begin
+
+                    if (byte_done)
+                        state <= ST_SENSOR_READ;
+
+                end
+
+                // RECEIVE ONE SENSOR BYTE
+                ST_SENSOR_READ: begin
+
+                    tx_byte <= 8'h00;
+
+                    byte_start <= 1'b1;
+
+                    state <= ST_SENSOR_READ_WAIT;
+
+                end
+
+
+                ST_SENSOR_READ_WAIT: begin
+
+                    if (byte_done) begin
+
+                        imu_data[byte_count] <= rx_byte;
+
+                        if (byte_count == 11) begin
+
+                            spi_cs_n <= 1'b1;
+
+                            state <= ST_FINISH;
+
+                        end
+
+                        else begin
+
+                            byte_count <= byte_count + 1'b1;
+
+                            state <= ST_SENSOR_READ;
+
+                        end
+
+                    end
+
+                end
+
+                // COMBINE 12 BYTES INTO SIX 16-BIT VALUES
+
+                ST_FINISH: begin
+
+                    accel_x <= {
+                        imu_data[0],
+                        imu_data[1]
+                    };
+
+                    accel_y <= {
+                        imu_data[2],
+                        imu_data[3]
+                    };
+
+                    accel_z <= {
+                        imu_data[4],
+                        imu_data[5]
+                    };
+
+                    gyro_x <= {
+                        imu_data[6],
+                        imu_data[7]
+                    };
+
+                    gyro_y <= {
+                        imu_data[8],
+                        imu_data[9]
+                    };
+
+                    gyro_z <= {
+                        imu_data[10],
+                        imu_data[11]
+                    };
+
+                    data_valid <= 1'b1;
+
+                    busy <= 1'b0;
+
+                    state <= ST_READY;
+
+                end
+
+                // ERROR
+
+                ST_ERROR: begin
+
+                    spi_cs_n <= 1'b1;
+
+                    busy <= 1'b0;
+
+                    init_done <= 1'b0;
+
+                    // Stay here until reset.
+
+                end
+
+
+                default: begin
+                    state <= ST_ERROR;
+                    error <= 1'b1;
+                end
+
+            endcase
+
+        end
+
+    end
+
+endmodule

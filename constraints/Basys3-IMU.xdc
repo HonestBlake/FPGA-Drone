@@ -5,6 +5,6 @@
 # This fragment supplies pin assignments only. The board wrapper must provide
 # the clock/reset and validate external SPI IO timing including level shifters.
 set_property -dict { PACKAGE_PIN J1 IOSTANDARD LVCMOS33 } [get_ports imu_spi_cs_n]
-set_property -dict { PACKAGE_PIN L2 IOSTANDARD LVCMOS33 } [get_ports imu_spi_sclk]
-set_property -dict { PACKAGE_PIN J2 IOSTANDARD LVCMOS33 } [get_ports imu_spi_mosi]
-set_property -dict { PACKAGE_PIN G2 IOSTANDARD LVCMOS33 PULLDOWN true } [get_ports imu_spi_miso]
+set_property -dict { PACKAGE_PIN L2 IOSTANDARD LVCMOS33 PULLDOWN true } [get_ports imu_spi_miso]
+set_property -dict { PACKAGE_PIN J2 IOSTANDARD LVCMOS33 } [get_ports imu_spi_sclk]
+set_property -dict { PACKAGE_PIN G2 IOSTANDARD LVCMOS33 } [get_ports imu_spi_mosi]

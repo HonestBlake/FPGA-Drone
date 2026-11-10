@@ -7,10 +7,10 @@ module imu_spi #(
 
     // Basys 3 = 100 MHz.
     // Datasheet allows up to 100 ms before register access after power-up.
-    parameter POWERUP_CYCLES = (CLK_FREQ / 1000) * 100,
+    parameter integer POWERUP_CYCLES = (CLK_FREQ / 1000) * 100,
 
     // Gyro startup from sleep can take about 35 ms.
-    parameter WAKE_CYCLES = (CLK_FREQ / 1000) * 35
+    parameter integer WAKE_CYCLES = (CLK_FREQ / 1000) * 35
 )(
     input  wire clk,
     input  wire reset,
@@ -36,19 +36,16 @@ module imu_spi #(
     output reg busy,
     output reg init_done,
     output reg imu_detected,
-    output reg error
+    output reg error,
+    // First failing read is preserved until reset (register address, not command).
+    output reg [7:0] fault_register, fault_expected, fault_observed
 );
 
-    // =========================================================
-    // ICM-20948 REGISTER ADDRESSES
-    // =========================================================
 
-    localparam WHO_EXPECTED   = 8'hEA;
+    // WHO_AM_I for the checked transaction sequencer below.
+    localparam WHO_EXPECTED = 8'hEA;
 
-    // =========================================================
     // SPI BYTE ENGINE
-    // =========================================================
-
     reg [7:0] tx_byte;
     reg [7:0] rx_byte;
     reg [7:0] rx_shift;
@@ -58,16 +55,16 @@ module imu_spi #(
     reg       byte_done;
 
     reg [3:0] bit_count;
-    reg [31:0] clk_count;
+    localparam integer DIV_WIDTH = (CLK_DIV > 1) ? $clog2(CLK_DIV) : 1;
+    reg [DIV_WIDTH-1:0] clk_count;
 
-    // ---------------------------------------------------------
     // This block transmits/receives ONE SPI byte.
     //
     // SPI mode used:
     // SCLK idle low
     // MOSI changes while clock low
     // MISO sampled on rising edge
-    // ---------------------------------------------------------
+
 
     always @(posedge clk) begin
 
@@ -93,10 +90,8 @@ module imu_spi #(
             // Goes high for one FPGA clock when a byte finishes.
             byte_done <= 1'b0;
 
-            // -------------------------------------------------
-            // Start a new byte
-            // -------------------------------------------------
 
+            // Start a new byte
             if (byte_start && !byte_busy) begin
 
                 byte_busy <= 1'b1;
@@ -112,9 +107,7 @@ module imu_spi #(
                 rx_shift <= 0;
             end
 
-            // -------------------------------------------------
             // Byte currently transferring
-            // -------------------------------------------------
 
             else if (byte_busy) begin
 
@@ -122,10 +115,8 @@ module imu_spi #(
 
                     clk_count <= 0;
 
-                    // =========================================
-                    // Rising SPI edge
-                    // =========================================
 
+                    // Rising SPI edge
                     if (spi_sclk == 1'b0) begin
 
                         spi_sclk <= 1'b1;
@@ -138,10 +129,8 @@ module imu_spi #(
 
                     end
 
-                    // =========================================
-                    // Falling SPI edge
-                    // =========================================
 
+                    // Falling SPI edge
                     else begin
 
                         spi_sclk <= 1'b0;
@@ -178,7 +167,6 @@ module imu_spi #(
         end
     end
 
-
     // Transaction sequencer around the team member's mode-0 byte engine.
     // Delay CS transitions by a full half-period (>=50 ns at supported clocks).
     // Datasheet table 8 additionally requires 500 ns CS hold after transfer.
@@ -190,6 +178,7 @@ module imu_spi #(
     reg [31:0] wait_counter;
     reg [4:0] init_index;
     reg [7:0] command, write_value;
+    reg user_ctrl_retried;
     reg [3:0] length, byte_count;
     reg [7:0] imu_data [0:11];
     reg [15:0] init_word;
@@ -200,24 +189,25 @@ module imu_spi #(
     always @* begin
         case (init_index)
             0: init_word = 16'h7f00;
-            1: init_word = 16'h0680; // DEVICE_RESET; wait 100 ms afterwards
-            2: init_word = 16'h7f00;
-            3: init_word = 16'h0310; // disable primary I2C interface
-            4: init_word = 16'h0601; // wake, auto PLL
-            5: init_word = 16'h0700; // all accel/gyro axes enabled
-            6: init_word = 16'h1101; // raw-data-ready status/interrupt enabled
-            7: init_word = 16'h8310; // verify USER_CTRL
-            8: init_word = 16'h8601; // verify wake
-            9: init_word = 16'h7f20;
-            10: init_word = 16'h0901; // align ODR start
-            11: init_word = 16'h0001; // gyro 1125 / 2 Hz
-            12: init_word = 16'h0119; // +/-250 dps, DLPF ~51 Hz
-            13: init_word = 16'h1000;
-            14: init_word = 16'h1101; // accel 1125 / 2 Hz
-            15: init_word = 16'h1419; // +/-2g, DLPF ~50 Hz
-            16: init_word = 16'h8119; // verify gyro configuration
-            17: init_word = 16'h9419; // verify accel configuration
-            18: init_word = 16'h7f00;
+            1: init_word = 16'h80ea; // Identify the device before configuration writes.
+            2: init_word = 16'h0680; // DEVICE_RESET; wait 100 ms afterwards
+            3: init_word = 16'h7f00;
+            4: init_word = 16'h0601; // wake, auto PLL; allow startup before other writes
+            5: init_word = 16'h0310; // reassert SPI-only mode after waking
+            6: init_word = 16'h0700; // all accel/gyro axes enabled
+            7: init_word = 16'h1101; // raw-data-ready status/interrupt enabled
+            8: init_word = 16'h8310; // verify USER_CTRL
+            9: init_word = 16'h8601; // verify wake
+            10: init_word = 16'h7f20;
+            11: init_word = 16'h0901; // align ODR start
+            12: init_word = 16'h0001; // gyro 1125 / 2 Hz
+            13: init_word = 16'h0119; // +/-250 dps, DLPF ~51 Hz
+            14: init_word = 16'h1000;
+            15: init_word = 16'h1101; // accel 1125 / 2 Hz
+            16: init_word = 16'h1419; // +/-2g, DLPF ~50 Hz
+            17: init_word = 16'h8119; // verify gyro configuration
+            18: init_word = 16'h9419; // verify accel configuration
+            19: init_word = 16'h7f00;
             default: init_word = 16'h80ea; // verify identity in bank 0
         endcase
     end
@@ -230,6 +220,8 @@ module imu_spi #(
             write_value <= 0; length <= 1; byte_count <= 0;
             busy <= 1; data_valid <= 0; init_done <= 0;
             imu_detected <= 0; error <= 0;
+            fault_register <= 0; fault_expected <= 0; fault_observed <= 0;
+            user_ctrl_retried <= 0;
             accel_x <= 0; accel_y <= 0; accel_z <= 0;
             gyro_x <= 0; gyro_y <= 0; gyro_z <= 0;
             for (i=0; i<12; i=i+1) imu_data[i] <= 0;
@@ -241,9 +233,7 @@ module imu_spi #(
                         (state == RESET_WAIT && wait_counter >= RESET_CYCLES-1) ||
                         (state == WAKE_WAIT && wait_counter >= WAKE_CYCLES-1)) begin
                         wait_counter <= 0;
-                        if (state == WAKE_WAIT) begin
-                            init_done <= 1; busy <= 0; state <= READY;
-                        end else state <= INIT;
+                        state <= INIT;
                     end else wait_counter <= wait_counter + 1'b1;
                 end
                 INIT: begin
@@ -276,16 +266,31 @@ module imu_spi #(
                         wait_counter <= 0;
                         case (return_state)
                             INIT: begin
-                                if (command[7] && imu_data[0] !== write_value) state <= FAILED;
-                                else if (init_index == 19) begin
-                                    imu_detected <= 1; state <= WAKE_WAIT;
+                                if (command[7] && imu_data[0] !== write_value) begin
+                                    if (init_index == 8 && !user_ctrl_retried) begin
+                                        // One bounded recovery attempt after clock/power startup.
+                                        // A persistent mismatch still latches the original fault.
+                                        user_ctrl_retried <= 1;
+                                        init_index <= 5; state <= WAKE_WAIT;
+                                    end else begin
+                                        fault_register <= {1'b0,command[6:0]};
+                                        fault_expected <= write_value; fault_observed <= imu_data[0];
+                                        state <= FAILED;
+                                    end
+                                end else if (init_index == 20) begin
+                                    imu_detected <= 1; init_done <= 1; busy <= 0; state <= READY;
                                 end else begin
                                     init_index <= init_index+1'b1;
-                                    state <= (init_index == 1) ? RESET_WAIT : INIT;
+                                    if (init_index == 2) state <= RESET_WAIT;
+                                    else if (init_index == 4) state <= WAKE_WAIT;
+                                    else state <= INIT;
                                 end
                             end
                             CHECK_ID: begin
-                                if (imu_data[0] !== WHO_EXPECTED) state <= FAILED;
+                                if (imu_data[0] !== WHO_EXPECTED) begin
+                                    fault_register <= 0; fault_expected <= WHO_EXPECTED;
+                                    fault_observed <= imu_data[0]; state <= FAILED;
+                                end
                                 else state <= CHECK_READY;
                             end
                             CHECK_READY: begin
@@ -301,7 +306,10 @@ module imu_spi #(
                                 gyro_z <= {imu_data[10],imu_data[11]};
                                 data_valid <= 1; busy <= 0; state <= READY;
                             end
-                            default: state <= FAILED;
+                            default: begin
+                                fault_register <= 8'hff; fault_expected <= 0;
+                                fault_observed <= {4'b0,return_state}; state <= FAILED;
+                            end
                         endcase
                     end else wait_counter <= wait_counter+1'b1;
                 end
@@ -321,7 +329,10 @@ module imu_spi #(
                     error <= 1; init_done <= 0; imu_detected <= 0;
                     busy <= 0; spi_cs_n <= 1;
                 end
-                default: state <= FAILED;
+                default: begin
+                    fault_register <= 8'hff; fault_expected <= 0;
+                    fault_observed <= {4'b0,state}; state <= FAILED;
+                end
             endcase
         end
     end

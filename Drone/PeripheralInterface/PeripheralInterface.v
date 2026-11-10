@@ -27,7 +27,8 @@ module PeripheralInterface #(
     parameter integer LIDAR_BYTE_TIMEOUT_MS = 500,
     parameter integer MOTOR_DSHOT_RATE = 300_000,
     parameter integer MOTOR_UPDATE_HZ = 1_000,
-    parameter integer MOTOR_STARTUP_MS = 1_000
+    parameter integer MOTOR_STARTUP_MS = 1_000,
+    parameter integer IMU_MOUNT_FRD = 0
 ) (
     input wire clk,
     input wire rst,
@@ -79,9 +80,10 @@ module PeripheralInterface #(
         .WAKE_CYCLES(IMU_WAKE_CYCLES),
         .POLL_HZ(IMU_POLL_HZ),
         .CALIBRATION_SAMPLES(IMU_CALIBRATION_SAMPLES),
-        .TIMEOUT_MS(IMU_TIMEOUT_MS)
+        .TIMEOUT_MS(IMU_TIMEOUT_MS), .MOUNT_FRD(IMU_MOUNT_FRD)
     ) imu (
         .clk(clk), .rst(rst),
+        .recover_request(1'b0),
         .spi_miso(imu_spi_miso),
         .spi_cs_n(imu_spi_cs_n),
         .spi_sclk(imu_spi_sclk),

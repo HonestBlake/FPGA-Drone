@@ -17,14 +17,17 @@ module FlightController #(
     parameter integer ATTITUDE_KP = 32,
     parameter integer RATE_KD = 4,
     parameter integer YAW_KP = 8,
-    parameter integer MAX_CORRECTION = 400
+    parameter integer MAX_CORRECTION = 400,
+    parameter integer FULL_MANUAL_CONTROL = 0,
+    parameter integer MAX_ROLL_CD = 2000,
+    parameter integer YAW_MIX_SIGN = 1
 ) (
     input wire clk,
     input wire rst,
     input wire control_tick,
     input wire [9:0] throttle,
-    input wire signed [10:0] roll_command, // Observed for compatibility; ignored.
-    input wire signed [10:0] pitch_command, // Positive = forward; negative ignored.
+    input wire signed [10:0] roll_command, // Right-down target in full-manual mode.
+    input wire signed [10:0] pitch_command, // Positive = forward/nose-down.
     input wire signed [10:0] yaw_command,   // Positive = turn right.
     input wire arm_request,
     input wire avoidance_enable,
@@ -56,7 +59,8 @@ module FlightController #(
     output wire [10:0] front_right_throttle,
     output wire [10:0] front_left_throttle,
     output wire [10:0] back_right_throttle,
-    output wire [10:0] back_left_throttle
+    output wire [10:0] back_left_throttle,
+    output reg signed [15:0] roll_setpoint_cd
 );
     localparam [2:0] CONTINUE = 3'd0, STOP = 3'd1, DIVERT_UP = 3'd2,
                      DIVERT_LEFT = 3'd3, DIVERT_RIGHT = 3'd4;
@@ -157,14 +161,19 @@ module FlightController #(
         end
     endfunction
 
-    integer next_thrust, next_pitch, next_yaw, base;
+    integer next_thrust, next_roll, next_pitch, next_yaw, base;
     integer roll_correction, pitch_correction, yaw_correction;
     reg next_avoidance;
     reg [2:0] next_action;
     always @* begin
         next_thrust = (throttle > 1000) ? 1000 : throttle;
+        next_roll = 0;
+        if (FULL_MANUAL_CONTROL &&
+            ($signed(roll_command) > FORWARD_DEADBAND || $signed(roll_command) < -FORWARD_DEADBAND))
+            next_roll = (clamp_axis($signed(roll_command)) * MAX_ROLL_CD) / 500;
         next_pitch = 0;
-        if ($signed(pitch_command) > FORWARD_DEADBAND)
+        if ($signed(pitch_command) > FORWARD_DEADBAND ||
+            (FULL_MANUAL_CONTROL && $signed(pitch_command) < -FORWARD_DEADBAND))
             next_pitch = -(clamp_axis($signed(pitch_command)) * MAX_PITCH_CD) / 500;
         next_yaw = (clamp_axis($signed(yaw_command)) * MAX_YAW_RATE_CDPS) / 500;
         next_avoidance = 0;
@@ -190,9 +199,9 @@ module FlightController #(
             endcase
         end
         // Small-angle PD roll/pitch controller; proportional yaw-rate feedback.
-        roll_correction = clamp_correction((-roll_cd * ATTITUDE_KP - roll_rate * RATE_KD) / 256);
+        roll_correction = clamp_correction(((next_roll - roll_cd) * ATTITUDE_KP - roll_rate * RATE_KD) / 256);
         pitch_correction = clamp_correction(((next_pitch - pitch_cd) * ATTITUDE_KP - pitch_rate * RATE_KD) / 256);
-        yaw_correction = clamp_correction(((next_yaw - yaw_rate) * YAW_KP) / 256);
+        yaw_correction = YAW_MIX_SIGN * clamp_correction(((next_yaw - yaw_rate) * YAW_KP) / 256);
         base = 48 + (next_thrust * 1999) / 1000;
     end
 
@@ -200,9 +209,11 @@ module FlightController #(
         if (rst || !motors_armed) begin
             motor_fr <= 0; motor_fl <= 0; motor_br <= 0; motor_bl <= 0;
             avoidance_active <= 0; applied_action <= CONTINUE;
-            pitch_setpoint_cd <= 0; yaw_rate_setpoint_cdps <= 0; thrust_setpoint <= 0;
+            roll_setpoint_cd <= 0; pitch_setpoint_cd <= 0;
+            yaw_rate_setpoint_cdps <= 0; thrust_setpoint <= 0;
         end else if (control_tick) begin
             avoidance_active <= next_avoidance; applied_action <= next_action;
+            roll_setpoint_cd <= next_roll;
             pitch_setpoint_cd <= next_pitch;
             yaw_rate_setpoint_cdps <= next_yaw;
             thrust_setpoint <= next_thrust;
@@ -230,7 +241,9 @@ module FlightController #(
             DIVERT_YAW_RATE_CDPS < 0 || DIVERT_YAW_RATE_CDPS > MAX_YAW_RATE_CDPS ||
             DIVERT_UP_THROTTLE < 0 || DIVERT_UP_THROTTLE > 1000 ||
             ATTITUDE_KP < 0 || ATTITUDE_KP > 4096 || RATE_KD < 0 || RATE_KD > 4096 ||
-            YAW_KP < 0 || YAW_KP > 4096 || MAX_CORRECTION < 0 || MAX_CORRECTION > 1999)
+            YAW_KP < 0 || YAW_KP > 4096 || MAX_CORRECTION < 0 || MAX_CORRECTION > 1999 ||
+            (FULL_MANUAL_CONTROL != 0 && FULL_MANUAL_CONTROL != 1) || MAX_ROLL_CD < 0 || MAX_ROLL_CD > 4500 ||
+            (YAW_MIX_SIGN != 1 && YAW_MIX_SIGN != -1))
             $fatal(1, "FlightController: invalid timeout, limit, or gain");
     end
     // synthesis translate_on

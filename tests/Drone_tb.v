@@ -59,6 +59,7 @@ module Drone_tb;
         .imu_pitch_rate_cdps(16'sd0), .imu_yaw_rate_cdps(16'sd0),
         .npu_external_available(1'b0), .npu_external_action_valid(1'b0), .npu_external_action(3'd0));
     Icm20948Model physical_sensor(physical_rst,physical_cs,physical_sclk,physical_mosi,physical_miso);
+    initial physical_sensor.az = 16384; // Measured level raw Z on the physical IMU.
     integer tick_phase = 0;
     reg flight_phase = 0, imu_stream = 0, imu_health = 0, imu_fault = 0;
     reg npu_external_available = 0, npu_external_action_valid = 0;
@@ -68,7 +69,7 @@ module Drone_tb;
     wire imu_sample_valid = imu_stream && flight_cycle % 100 == 0;
     always @(negedge clk) flight_cycle = flight_cycle + 1;
     Drone #(
-        .CLK_FREQ(10_000_000), .BAUD_RATE(1_000_000),
+        .CLK_FREQ(10_000_000), .BAUD_RATE(1_000_000), .FC_YAW_MIX_SIGN(1),
         .TIMEOUT_MS(1), .BYTE_TIMEOUT_US(50),
         .ROLL_CHANNEL(14), .PITCH_CHANNEL(3), .THROTTLE_CHANNEL(2),
         .YAW_CHANNEL(4), .ARM_CHANNEL(6), .MODE_CHANNEL(5), .SWITCH_THRESHOLD(1750),

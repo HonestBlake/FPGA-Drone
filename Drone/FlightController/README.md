@@ -32,6 +32,32 @@ Turns use yaw so the sensor follows the commanded direction rather than commandi
 sideways roll. Leveling does not guarantee that the drone's velocity follows its
 heading: wind, inertia, and sideslip remain outside this prototype's feedback.
 
+## Full-control test profile
+
+`FULL_MANUAL_CONTROL=1` enables signed pilot roll and forward/reverse pitch.
+Positive roll requests right-side-down attitude up to `MAX_ROLL_CD` (default
+2000 = 20 degrees). Positive pitch stick still requests nose-down; negative
+pitch requests nose-up. `FORWARD_DEADBAND` applies symmetrically to roll/pitch
+in this mode. Yaw remains signed rate control. `roll_setpoint_cd` exposes the
+roll target, and the proportional roll term becomes
+`(roll_target - roll) * ATTITUDE_KP` instead of `-roll * ATTITUDE_KP`.
+
+The default mode preserves the production policy. `Drone` forwards
+`FC_FULL_MANUAL_CONTROL` and `FC_MAX_ROLL_CD` with backward-compatible defaults.
+`vivado flight test/` opts into full control and excludes lidar/NPU instances.
+
+`YAW_MIX_SIGN=1` retains the original FR/BL CCW, FL/BR CW rotor convention.
+Use -1 for the confirmed airframe's FR/BL CW, FL/BR CCW rotation viewed from
+above. `Drone.FC_YAW_MIX_SIGN` defaults to -1 for that hardware. This changes
+the torque mixer, while pilot yaw commands and measured yaw rates stay positive
+for a right turn. `Drone.IMU_MOUNT_FRD=0` selects the positive-Z profile following
+the measured level acceleration (+16384). Verify physical X/Y and gyro signs
+before flight; the earlier reported FRD mounting disagreed with measured Z.
+
+The Basys3 flight-test wrapper supplies `arm_request` from SW4 rather than
+radio CH5. The controller's health, idle-throttle and OFF/ON interlocks remain
+unchanged. The production `Drone` radio interface retains its own arm mapping.
+
 ## Integrated IMU contract
 
 `PeripheralInterface/IMU` now contains the team member's SPI byte engine,

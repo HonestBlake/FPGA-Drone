@@ -1,0 +1,294 @@
+`timescale 1ns / 1ps
+
+module basys3_imu_top (
+    input  wire clk,
+    input  wire btnC,          // reset / reinitialize
+    input  wire btnU,          // optional manual sample trigger
+    input  wire [2:0] sw,      // selects displayed IMU value
+
+    // Physical SPI connection to ICM-20948
+    output wire spi_cs_n,
+    output wire spi_sclk,
+    output wire spi_mosi,
+    input  wire spi_miso,
+
+    // Status LEDs
+    output wire [5:0] led,
+
+    // Seven-segment display
+    output wire [6:0] seg,
+    output wire [3:0] an,
+    output wire dp
+);
+
+    // ============================================================
+    // Button synchronization
+    // ============================================================
+
+    reg reset_sync_1;
+    reg reset_sync_2;
+
+    reg start_sync_1;
+    reg start_sync_2;
+    reg start_previous;
+
+    always @(posedge clk) begin
+        reset_sync_1 <= btnC;
+        reset_sync_2 <= reset_sync_1;
+
+        start_sync_1 <= btnU;
+        start_sync_2 <= start_sync_1;
+
+        start_previous <= start_sync_2;
+    end
+
+    wire reset;
+    wire manual_start_pulse;
+
+    assign reset = reset_sync_2;
+
+    // One-clock-cycle pulse when BTNU is pressed
+    assign manual_start_pulse =
+        start_sync_2 & ~start_previous;
+
+
+    // ============================================================
+    // IMU signals
+    // ============================================================
+
+    wire signed [15:0] accel_x;
+    wire signed [15:0] accel_y;
+    wire signed [15:0] accel_z;
+
+    wire signed [15:0] gyro_x;
+    wire signed [15:0] gyro_y;
+    wire signed [15:0] gyro_z;
+
+    wire data_valid;
+    wire busy;
+    wire init_done;
+    wire imu_detected;
+    wire error;
+
+
+    // ============================================================
+    // Automatic IMU sampling
+    //
+    // Basys 3 clock = 100 MHz
+    //
+    // 100,000,000 / 1,000,000 = 100 Hz
+    //
+    // Therefore a new sample is requested approximately
+    // every 10 ms.
+    // ============================================================
+
+    parameter SAMPLE_PERIOD_CYCLES = 1_000_000;
+
+    reg [19:0] sample_counter;
+    reg auto_start_pulse;
+
+    always @(posedge clk) begin
+
+        if (reset || !init_done) begin
+
+            sample_counter   <= 20'd0;
+            auto_start_pulse <= 1'b0;
+
+        end
+
+        else begin
+
+            // Default value:
+            // pulse only lasts for one clock cycle
+            auto_start_pulse <= 1'b0;
+
+            // Only count while the IMU controller is idle
+            if (!busy) begin
+
+                if (sample_counter >= SAMPLE_PERIOD_CYCLES - 1) begin
+
+                    sample_counter   <= 20'd0;
+                    auto_start_pulse <= 1'b1;
+
+                end
+
+                else begin
+
+                    sample_counter <= sample_counter + 1'b1;
+
+                end
+
+            end
+
+            else begin
+
+                // Restart the 10 ms delay after
+                // the current SPI transaction finishes
+                sample_counter <= 20'd0;
+
+            end
+
+        end
+
+    end
+
+
+    // ============================================================
+    // Combine manual and automatic start requests
+    // ============================================================
+
+    wire imu_start;
+
+    assign imu_start =
+        manual_start_pulse |
+        auto_start_pulse;
+
+
+    // ============================================================
+    // ICM-20948 SPI controller
+    // ============================================================
+
+    imu_spi #(
+        .CLK_DIV(10),
+        .POWERUP_CYCLES(10_000_000),
+        .WAKE_CYCLES(3_500_000)
+    ) imu_controller (
+        .clk(clk),
+        .reset(reset),
+
+        // BTNU or automatic 100 Hz request
+        .start(imu_start),
+
+        // Physical SPI signals
+        .spi_cs_n(spi_cs_n),
+        .spi_sclk(spi_sclk),
+        .spi_mosi(spi_mosi),
+        .spi_miso(spi_miso),
+
+        // Sensor outputs
+        .accel_x(accel_x),
+        .accel_y(accel_y),
+        .accel_z(accel_z),
+
+        .gyro_x(gyro_x),
+        .gyro_y(gyro_y),
+        .gyro_z(gyro_z),
+
+        // Status outputs
+        .data_valid(data_valid),
+        .busy(busy),
+        .init_done(init_done),
+        .imu_detected(imu_detected),
+        .error(error)
+    );
+
+
+    // ============================================================
+    // Latch whether at least one sensor sample has been received
+    // ============================================================
+
+    reg data_seen;
+
+    always @(posedge clk) begin
+
+        if (reset)
+            data_seen <= 1'b0;
+
+        else if (data_valid)
+            data_seen <= 1'b1;
+
+    end
+
+
+    // ============================================================
+    // Toggle an LED every time a new sample is received
+    //
+    // This makes it easier to confirm that repeated sampling
+    // is occurring.
+    // ============================================================
+
+    reg sample_toggle;
+
+    always @(posedge clk) begin
+
+        if (reset)
+            sample_toggle <= 1'b0;
+
+        else if (data_valid)
+            sample_toggle <= ~sample_toggle;
+
+    end
+
+
+    // ============================================================
+    // LED indicators
+    // ============================================================
+
+    assign led[0] = init_done;
+    // Initialization sequence completed
+
+    assign led[1] = imu_detected;
+    // WHO_AM_I returned 0xEA
+
+    assign led[2] = data_seen;
+    // At least one valid 12-byte sensor sample received
+
+    assign led[3] = error;
+    // Initialization / WHO_AM_I error
+
+    assign led[4] = busy;
+    // SPI controller currently busy
+
+    assign led[5] = sample_toggle;
+    // Toggles every completed sensor sample
+
+
+    // ============================================================
+    // Select sensor value for seven-segment display
+    // ============================================================
+
+    reg [15:0] display_value;
+
+    always @(*) begin
+
+        case (sw)
+
+            3'b000:
+                display_value = accel_x;
+
+            3'b001:
+                display_value = accel_y;
+
+            3'b010:
+                display_value = accel_z;
+
+            3'b011:
+                display_value = gyro_x;
+
+            3'b100:
+                display_value = gyro_y;
+
+            3'b101:
+                display_value = gyro_z;
+
+            default:
+                display_value = 16'h0000;
+
+        endcase
+
+    end
+
+
+    // ============================================================
+    // Seven-segment display driver
+    // ============================================================
+
+    seven_seg display_driver (
+        .clk(clk),
+        .value(display_value),
+        .seg(seg),
+        .an(an),
+        .dp(dp)
+    );
+
+endmodule

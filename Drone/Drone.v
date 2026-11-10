@@ -48,7 +48,11 @@ module Drone #(
     parameter integer FC_ATTITUDE_KP = 32,
     parameter integer FC_RATE_KD = 4,
     parameter integer FC_YAW_KP = 8,
-    parameter integer FC_MAX_CORRECTION = 400
+    parameter integer FC_MAX_CORRECTION = 400,
+    parameter integer FC_FULL_MANUAL_CONTROL = 0,
+    parameter integer FC_MAX_ROLL_CD = 2000,
+    parameter integer IMU_MOUNT_FRD = 0,
+    parameter integer FC_YAW_MIX_SIGN = -1
 ) (
     input wire clk,
     input wire rst,
@@ -95,6 +99,7 @@ module Drone #(
     output wire npu_fresh,
     output wire avoidance_active,
     output wire [2:0] applied_action,
+    output wire signed [15:0] roll_setpoint_cd,
     output wire signed [15:0] pitch_setpoint_cd,
     output wire signed [15:0] yaw_rate_setpoint_cdps,
     output wire [9:0] thrust_setpoint,
@@ -166,6 +171,7 @@ module Drone #(
         .IMU_POLL_HZ(IMU_POLL_HZ),
         .IMU_CALIBRATION_SAMPLES(IMU_CALIBRATION_SAMPLES),
         .IMU_TIMEOUT_MS(IMU_TIMEOUT_MS),
+        .IMU_MOUNT_FRD(IMU_MOUNT_FRD),
         .CLK_FREQ(CLK_FREQ),
         .BAUD_RATE(BAUD_RATE),
         .TIMEOUT_MS(TIMEOUT_MS),
@@ -245,7 +251,9 @@ module Drone #(
         .MAX_PITCH_CD(FC_MAX_PITCH_CD), .MAX_YAW_RATE_CDPS(FC_MAX_YAW_RATE_CDPS),
         .DIVERT_YAW_RATE_CDPS(FC_DIVERT_YAW_RATE_CDPS), .DIVERT_UP_THROTTLE(FC_DIVERT_UP_THROTTLE),
         .ATTITUDE_KP(FC_ATTITUDE_KP), .RATE_KD(FC_RATE_KD), .YAW_KP(FC_YAW_KP),
-        .MAX_CORRECTION(FC_MAX_CORRECTION)
+        .MAX_CORRECTION(FC_MAX_CORRECTION),
+        .FULL_MANUAL_CONTROL(FC_FULL_MANUAL_CONTROL), .MAX_ROLL_CD(FC_MAX_ROLL_CD),
+        .YAW_MIX_SIGN(FC_YAW_MIX_SIGN)
     ) flight_controller (
         .clk(clk), .rst(rst), .control_tick(control_tick),
         .throttle(throttle), .roll_command(roll_command),
@@ -261,7 +269,8 @@ module Drone #(
         .npu_action_valid(npu_action_valid), .npu_action(npu_action),
         .command_valid(flight_command_valid), .imu_fresh(imu_fresh), .npu_fresh(npu_fresh),
         .avoidance_active(avoidance_active), .applied_action(applied_action),
-        .pitch_setpoint_cd(pitch_setpoint_cd), .yaw_rate_setpoint_cdps(yaw_rate_setpoint_cdps),
+        .roll_setpoint_cd(roll_setpoint_cd), .pitch_setpoint_cd(pitch_setpoint_cd),
+        .yaw_rate_setpoint_cdps(yaw_rate_setpoint_cdps),
         .thrust_setpoint(thrust_setpoint),
         .motors_armed(motors_armed),
         .front_right_throttle(front_right_throttle), .front_left_throttle(front_left_throttle),

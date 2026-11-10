@@ -7,6 +7,9 @@ module Icm20948Model #(
     reg [1:0] bank = 2;
     reg [7:0] who = 8'hea;
     reg ready_enable = 1, ignore_config = 0, disconnected = 0;
+    // Regression fixture for an interface setting lost during a sleep->wake
+    // transition, matching the observed 03.00 failure after initialization.
+    reg clear_user_ctrl_on_wake = 0, ignore_user_ctrl = 0, drop_user_ctrl_once = 0;
     reg signed [15:0] ax = 0, ay = 0, az = 16384, gx = 0, gy = 0, gz = 0;
     reg [7:0] shift, tx, command;
     reg [6:0] address;
@@ -59,8 +62,15 @@ module Icm20948Model #(
                         bank = 0; resets = resets+1;
                         for (i=0;i<512;i=i+1) registers[i] = 0;
                         registers[6] = 8'h41;
-                    end else if (!(ignore_config && bank == 2 && (address == 1 || address == 7'h14)))
-                        registers[bank*128+address] = shift;
+                    end else begin
+                        if (clear_user_ctrl_on_wake && bank == 0 && address == 6 &&
+                            registers[6][6] && !shift[6]) registers[3] = 0;
+                        if (drop_user_ctrl_once && bank == 0 && address == 3)
+                            drop_user_ctrl_once = 0;
+                        else if (!(ignore_config && bank == 2 && (address == 1 || address == 7'h14)) &&
+                            !(ignore_user_ctrl && bank == 0 && address == 3))
+                            registers[bank*128+address] = shift;
+                    end
                 end
                 address = address+1'b1; tx = read_register(address);
             end

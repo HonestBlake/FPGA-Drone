@@ -5,7 +5,8 @@
 module SevenSegmentDisplay #(
     parameter integer CLK_FREQ = 100_000_000,
     parameter integer REFRESH_HZ = 250, // Complete four-digit sweeps per second.
-    parameter integer BLANK_CYCLES = (CLK_FREQ / 100_000 < 2) ? 2 : CLK_FREQ / 100_000
+    parameter integer BLANK_CYCLES = (CLK_FREQ / 100_000 < 2) ? 2 : CLK_FREQ / 100_000,
+    parameter integer F_IS_MINUS = 0 // Optional dash for board-test status.
 ) (
     input wire clk,
     input wire rst,
@@ -44,7 +45,7 @@ module SevenSegmentDisplay #(
                 4'hc: hex_segments = 7'b1000110;
                 4'hd: hex_segments = 7'b0100001;
                 4'he: hex_segments = 7'b0000110;
-                4'hf: hex_segments = 7'b0001110;
+                4'hf: hex_segments = F_IS_MINUS ? 7'b0111111 : 7'b0001110;
                 default: hex_segments = 7'b1111111;
             endcase
         end

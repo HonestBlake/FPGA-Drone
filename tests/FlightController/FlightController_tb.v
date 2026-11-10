@@ -19,6 +19,8 @@ module FlightController_tb;
     wire [9:0] thrust_sp;
     wire [10:0] fr, fl, br, bl;
     reg [43:0] held_motors;
+    wire [10:0] full_fr, full_fl, full_br, full_bl;
+    wire signed [15:0] full_roll_sp, full_pitch_sp;
     always #5 clk = ~clk;
     always @(negedge clk) cycle = cycle + 1;
     // Small clock-frequency parameter makes the watchdog boundaries quick to test.
@@ -39,6 +41,21 @@ module FlightController_tb;
         .yaw_rate_setpoint_cdps(yaw_sp), .thrust_setpoint(thrust_sp),
         .front_right_throttle(fr), .front_left_throttle(fl),
         .back_right_throttle(br), .back_left_throttle(bl)
+    );
+    FlightController #(.CLK_FREQ(10_000), .IMU_TIMEOUT_MS(20),
+        .CONTROL_TIMEOUT_MS(5), .NPU_TIMEOUT_MS(10), .FULL_MANUAL_CONTROL(1)) full_manual (
+        .clk(clk), .rst(rst), .control_tick(control_tick), .throttle(throttle),
+        .roll_command(roll_command), .pitch_command(pitch_command), .yaw_command(yaw_command),
+        .arm_request(arm_request), .avoidance_enable(avoidance_enable),
+        .frame_valid(frame_valid), .rc_valid(rc_valid), .motor_ready(motor_ready),
+        .imu_sample_valid(sample_valid), .imu_valid(imu_valid),
+        .imu_calibrated(imu_calibrated), .imu_fault(imu_fault),
+        .imu_roll_cd(imu_roll), .imu_pitch_cd(imu_pitch),
+        .imu_roll_rate_cdps(imu_p), .imu_pitch_rate_cdps(imu_q), .imu_yaw_rate_cdps(imu_r),
+        .npu_available(npu_available), .npu_action_valid(npu_action_valid), .npu_action(npu_action),
+        .roll_setpoint_cd(full_roll_sp), .pitch_setpoint_cd(full_pitch_sp),
+        .front_right_throttle(full_fr), .front_left_throttle(full_fl),
+        .back_right_throttle(full_br), .back_left_throttle(full_bl)
     );
     task step;
         input integer count;
@@ -101,13 +118,24 @@ module FlightController_tb;
         throttle = 0; radio_frame(1); check_stop; // Rejected high-thrust arm is consumed.
         rearm; check_motors(1047, 1047, 1047, 1047);
         roll_command = -500; step(8); check_motors(1047, 1047, 1047, 1047);
+        if(full_roll_sp != -2000 || {full_fr,full_fl,full_br,full_bl} !== {11'd1297,11'd797,11'd1297,11'd797})
+            $fatal(1,"Full-manual left roll failed");
         roll_command = 500; step(8); check_motors(1047, 1047, 1047, 1047);
+        if(full_roll_sp != 2000 || {full_fr,full_fl,full_br,full_bl} !== {11'd797,11'd1297,11'd797,11'd1297})
+            $fatal(1,"Full-manual right roll failed");
+        roll_command = 20; step(8);
+        if(full_roll_sp != 0) $fatal(1,"Full-manual positive roll deadband");
+        roll_command = -20; step(8);
+        if(full_roll_sp != 0) $fatal(1,"Full-manual negative roll deadband");
+        roll_command = 0; step(8);
 
         pitch_command = 500; step(8);
         if (pitch_sp !== -16'sd2000) $fatal(1, "Forward pitch sign/range");
         check_motors(797, 797, 1297, 1297);
         pitch_command = -500; step(8);
         if (pitch_sp !== 0) $fatal(1, "Reverse pitch accepted");
+        if(full_pitch_sp != 2000 || {full_fr,full_fl,full_br,full_bl} !== {11'd1297,11'd1297,11'd797,11'd797})
+            $fatal(1,"Full-manual reverse pitch failed");
         check_motors(1047, 1047, 1047, 1047);
         pitch_command = 20; step(8);
         if (pitch_sp !== 0) $fatal(1, "Pitch deadband");

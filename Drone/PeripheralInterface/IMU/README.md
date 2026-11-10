@@ -10,6 +10,24 @@ This implements the accelerometer and gyroscope needed by the current flight
 controller. The breakout's AK09916 magnetometer, auxiliary I2C master, temperature,
 FIFO and DMP are not used. There is no compass heading or nine-axis fusion.
 
+## Team update reviewed November 9, 2026
+
+The newly supplied mode-0 `imu_spi.v` byte engine is merged into the shared
+driver, with a divider-sized counter and clock-derived timing parameters.
+The existing bank/reset recovery, configuration readbacks, CS timing, identity
+checks, fresh-data polling, and estimator are retained. The attachment's simpler
+sequencer lacks those checks and uses different default filter/update settings.
+The project's +/-250 dps, +/-2g, roughly 50 Hz filters and 562.5 Hz output rate
+remain aligned with the estimator.
+
+Neither attached module performs gyro calibration or attitude estimation. The
+attached `basys3_imu_top` is a raw-value display example with roughly 100 Hz
+requests, no automatic power-on reset initializer, and an unprovided `seven_seg`
+dependency. The new flight test uses the project's reset, poller, estimator,
+and display instead. The original files are preserved as non-design references
+under `vivado flight test/references/`. Automatic startup calibration is
+described below. The confirmed wire order is CS/MISO/SCLK/MOSI on JA1-JA4.
+
 ## Wiring and mounting
 
 Use the breakout's SPI header pins; the four-pin Qwiic connector carries I2C.
@@ -21,9 +39,9 @@ design or SPI timing closure result.
 | Basys3 connection | Breakout pin | `Drone` port |
 | --- | --- | --- |
 | JA1 / J1 | CS | `imu_spi_cs_n` |
-| JA2 / L2 | SCLK (SCL) | `imu_spi_sclk` |
-| JA3 / J2 | SDI (SDA) | `imu_spi_mosi` |
-| JA4 / G2 | SDO (AD0) | `imu_spi_miso` |
+| JA2 / L2 | SDO (AD0), MISO | `imu_spi_miso` |
+| JA3 / J2 | SCLK (SCL) | `imu_spi_sclk` |
+| JA4 / G2 | SDI (SDA), MOSI | `imu_spi_mosi` |
 | JA6 / 3.3 V | VCC | Power |
 | JA5 / ground | GND | Common ground |
 
@@ -33,23 +51,36 @@ breakout header with 3.3 V power and FPGA IO. See the
 and [schematic](https://cdn.sparkfun.com/assets/c/7/8/f/8/15335_9DoF_Schematic.pdf).
 INT is optional and unused because this implementation polls readiness.
 
-Mount the **sensor axes** X forward, Y left, Z up. Use the axes drawing in the
+Use 3.3 V breakout power with the Basys3, even when its external board supply
+is 5 V. A breakout's 5 V supply rating alone does not mean its external signal
+levels are safe for the FPGA. Power off before moving supply or signal wires.
+
+The hardware diagnostic measured **level raw Z near +16384**, contrary to the
+earlier reported Z-down mounting assumption. The selected profile is now
+X forward, Y left, Z up. Use the axes drawing in the
 [TDK datasheet](https://cdn.sparkfun.com/assets/7/f/e/c/d/DS-000189-ICM-20948-v1.3.pdf)
 to establish orientation. At rest, raw Z should be approximately +16384 and X/Y
-near zero. The estimator maps gyro rates to forward/right/down: X, -Y, -Z.
-Roll uses positive acceleration Y and pitch uses positive acceleration X.
+near zero. `IMU.MOUNT_FRD=1` remains available to rotate acceleration and gyro
+samples by 180 degrees about X for true FRD mounts whose level raw Z is negative.
+Raw telemetry remains in sensor axes. `Drone` and `PeripheralInterface` now
+default to `IMU_MOUNT_FRD=0`, matching the standalone IMU and measured positive-Z
+gravity sign. Physical X/Y directions and gyro feedback signs still require
+verification on the frame before flight. The estimator then maps gyro rates to
+forward/right/down: X, -Y, -Z. Roll uses transformed acceleration Y and pitch
+uses acceleration X.
 Positive roll lowers the right side; positive pitch raises the nose; positive
-yaw turns right. A differently mounted board requires an upstream axis transform
-or a change to the estimator. Do not infer mounting from connector position.
+yaw turns right. A different mounting requires the appropriate axis transform.
+Do not infer mounting from connector position.
 
 ## Sensor startup and data
 
 At the default 100 MHz FPGA clock, SPI runs at 5 MHz. Startup waits 100 ms,
-selects bank 0, resets the sensor, waits another 100 ms, disables the primary I2C
-interface, wakes all axes, and programs bank 2. Gyro and accel use +/-250 dps
+selects bank 0, checks identity, resets the sensor and waits another 100 ms.
+It then wakes the device/selects its clock and waits 35 ms before reasserting
+SPI-only mode, enabling axes and programming bank 2. Gyro and accel use +/-250 dps
 and +/-2g, approximately 50 Hz low-pass filters, aligned output clocks, and
 562.5 Hz register updates. Configuration readbacks and WHO_AM_I=0xEA are checked,
-then a further 35 ms wake interval is allowed. The identity, scale factors,
+with the wake wait preceding configuration rather than following it. The identity, scale factors,
 register values and timing come from the TDK datasheet linked above.
 
 The sequencer holds CS for at least 500 ns after the last falling clock edge
@@ -58,6 +89,34 @@ defaults to 500 Hz. Each poll checks identity and bank-0 INT_STATUS_1 readiness
 before a 12-byte burst starting at ACCEL_XOUT_H (0x2D). Reads without readiness
 never pulse `imu_raw_valid`. Six signed raw outputs update together. A bad
 identity or configuration readback latches the driver error until reset.
+
+The driver checks WHO_AM_I before device reset/configuration, then again after
+configuration and during polling. `imu_spi` and `IMU` expose `fault_register`,
+`fault_expected`, and `fault_observed`: the first failed read comparison,
+preserved until reset. The address excludes the SPI read bit; configuration
+addresses 01/14 refer to bank 2, while 00/03/06 refer to bank 0. Address FF
+indicates an unexpected sequencer state. `IMU.bus_fault` distinguishes driver
+failure from estimator/data faults. The flight-test wrapper displays the
+register/received byte on fault and uses a 1 MHz SPI clock for wiring diagnosis.
+
+Hardware diagnosis found `03.00`: USER_CTRL returned 00 after an expected 10,
+despite correct WHO_AM_I. This identifies the added interface-configuration
+check as the stopping point; it does not establish a sensor silicon fault.
+The wake/configuration order now follows a reset -> wake -> settle -> configure
+sequence. A failed USER_CTRL check gets one delayed rewrite attempt; persistent
+failure still latches the diagnostic and blocks arming. A simulated wake
+transition that clears USER_CTRL reproduced 03.00 with the former ordering and
+passes with the new ordering. This fixture is a regression scenario, not a
+measurement proving the physical chip's internal cause. Tests also inject a
+single dropped write and a persistent write failure, checking recovery and
+fault gating respectively.
+
+After the wake-order update, physical initialization passed (LD8/LD9 on).
+Calibration diagnostics then measured level raw Z near +16384 while the earlier
+FRD transform expected negative Z. With IMU_MOUNT_FRD=0 selected throughout the
+project, the user confirmed LD10/LD11 on and LD12 off after reset: physical
+startup calibration and fresh estimates now pass. This does not validate flight
+gains or establish the physical X/Y and gyro feedback directions.
 
 `imu_init_done` and `imu_detected` describe sensor initialization, not estimator
 calibration or arming permission. `imu_busy` describes driver activity.
@@ -85,9 +144,16 @@ Linear acceleration within that window can still disturb the estimate.
 `imu_sensor_valid` requires a calibrated, fresh estimate and a healthy sensor.
 `imu_sensor_fault` latches on bus error, stale samples (100 ms by default),
 raw-axis clipping, unrepresentable rates, or estimated roll/pitch outside
-+/-35 degrees. Reset clears the fault and requires calibration again. The flight
-controller then requires healthy arm-OFF followed by arm-ON radio packets at
-idle before rearming. Repeated reads of stale sensor registers cannot keep the
++/-35 degrees. Reset clears the fault and requires calibration again. Optional
+`RECOVERY_ENABLED=1` with `recover_request=1` also allows a fresh stationary sample
+from a ready, non-faulted driver to clear estimator state and start a complete
+new calibration. The flight-test wrapper grants permission only while SW4 is
+OFF, radio is valid and throttle is below 10. Production defaults remain zero;
+its recovery input is tied low. This does not reset or recover a latched SPI
+driver fault. The flight
+controller then requires healthy inputs and an arm-OFF followed by arm-ON request
+at idle before rearming. The Basys3 flight test supplies that request from SW4.
+Repeated reads of stale sensor registers cannot keep the
 flight controller armed.
 
 This estimator is for the existing small-angle control prototype. The sin(theta)
@@ -98,10 +164,17 @@ rates/accelerations to the selected ranges. Verify sensor orientation, gains,
 FPGA synthesis/resource use and 100 MHz timing on the actual board before flight;
 the simulations do not model airframe dynamics or validate physical hardware.
 
+The new flight-test hardware build found that the existing wide estimator
+arithmetic does not close at 100 MHz. Its board wrapper derives a constrained
+10 MHz core clock from the 100 MHz oscillator and passes that actual frequency
+to all shared modules, keeping the 500 Hz sample / 1 kHz control rates. Do not
+assume simulation at a 100 MHz clock establishes estimator timing closure.
+
 ## Configuration and verification
 
 `Drone` forwards `IMU_SPI_CLK_DIV`, `IMU_POWERUP_CYCLES`, `IMU_RESET_CYCLES`,
-`IMU_WAKE_CYCLES`, `IMU_POLL_HZ`, `IMU_CALIBRATION_SAMPLES`, and `IMU_TIMEOUT_MS`.
+`IMU_WAKE_CYCLES`, `IMU_POLL_HZ`, `IMU_CALIBRATION_SAMPLES`, `IMU_TIMEOUT_MS`, and
+`IMU_MOUNT_FRD`.
 Defaults derive from `CLK_FREQ`. `FC_IMU_TIMEOUT_MS` independently limits how long
 the flight controller accepts its last estimator sample. Simulation can shorten
 startup waits and calibration; keep production delays for hardware.

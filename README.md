@@ -1,5 +1,12 @@
 # FPGA drone project
 
+[`vivado flight test/`](vivado%20flight%20test/README.md) integrates radio on JB1,
+IMU CS/MISO/SCLK/MOSI on JA1-JA4, the shared controller's full-control profile,
+throttle display, and motor selection. It excludes lidar/NPU. Motor order is
+SW0 back-left, SW1 front-left, SW2 back-right, SW3 front-right on JA7-JA10.
+Basys3 SW4 controls arming. Its guide covers automatic calibration and mounting /
+feedback checks required before flight.
+
 `Drone/` is the source root and `Drone/Drone.v` is the top module. Folders represent
 subsystems and contain a matching entry module. Helper modules share that folder;
 they do not get individual subfolders. Larger subsystems such as

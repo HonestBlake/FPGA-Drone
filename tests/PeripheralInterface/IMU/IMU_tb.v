@@ -12,6 +12,7 @@ module IMU_tb;
     IMU #(.CLK_FREQ(10_000_000), .POWERUP_CYCLES(20), .RESET_CYCLES(20), .WAKE_CYCLES(20),
         .CALIBRATION_SAMPLES(4), .TIMEOUT_MS(10)) dut (
         .clk(clk), .rst(rst), .spi_cs_n(cs), .spi_sclk(sclk), .spi_mosi(mosi), .spi_miso(miso),
+        .recover_request(1'b0),
         .raw_valid(raw_valid), .busy(busy), .init_done(init_done), .detected(detected),
         .sample_valid(sample_valid), .valid(valid), .calibrated(calibrated), .fault(fault),
         .roll_cd(roll), .pitch_cd(pitch), .roll_rate_cdps(rx), .pitch_rate_cdps(ry), .yaw_rate_cdps(rz));

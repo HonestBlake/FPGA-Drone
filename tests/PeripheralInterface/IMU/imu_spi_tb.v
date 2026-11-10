@@ -8,12 +8,14 @@ module imu_spi_tb;
     always #5 board_clk=~board_clk;
     wire cs, sclk, mosi, miso, data_valid, busy, init_done, detected, error;
     wire signed [15:0] ax, ay, az, gx, gy, gz;
+    wire [7:0] fault_register, fault_expected, fault_observed;
     imu_spi #(.CLK_FREQ(10_000_000), .CLK_DIV(1), .POWERUP_CYCLES(20),
         .RESET_CYCLES(20), .WAKE_CYCLES(20)) dut (
         .clk(clk), .reset(reset), .start(start), .spi_cs_n(cs), .spi_sclk(sclk),
         .spi_mosi(mosi), .spi_miso(miso), .accel_x(ax), .accel_y(ay), .accel_z(az),
         .gyro_x(gx), .gyro_y(gy), .gyro_z(gz), .data_valid(data_valid), .busy(busy),
-        .init_done(init_done), .imu_detected(detected), .error(error));
+        .init_done(init_done), .imu_detected(detected), .error(error),
+        .fault_register(fault_register), .fault_expected(fault_expected), .fault_observed(fault_observed));
     Icm20948Model sensor(reset,cs,sclk,mosi,miso);
     // Exercise the production 100 MHz / default-divider SPI edge timing too.
     wire board_cs,board_sclk,board_mosi,board_miso,board_init,board_error;
@@ -35,7 +37,10 @@ module imu_spi_tb;
     endtask
     initial begin
         $dumpfile("imu_spi.vcd"); $dumpvars(0,imu_spi_tb);
-        restart; wait(init_done); #1;
+        sensor.clear_user_ctrl_on_wake=1;
+        restart; wait(init_done || error); #1;
+        if(error) $fatal(1,"Wake-transition regression: register %h expected %h received %h",
+            fault_register,fault_expected,fault_observed);
         if(!board_init || board_error) $fatal(1,"100 MHz default SPI initialization/timing failed");
         if (!detected || error || sensor.resets != 1 || sensor.bank != 0 ||
             sensor.registers[3] != 8'h10 || sensor.registers[6] != 1 || sensor.registers[7] != 0 ||
@@ -58,10 +63,27 @@ module imu_spi_tb;
         if(data_valid || sensor.reads != 2) $fatal(1,"Stale registers published as fresh");
         sensor.disconnected=1; request; wait(error); #1;
         if(init_done || detected || data_valid) $fatal(1,"Disconnect health failed");
+        if({fault_register,fault_expected,fault_observed} !== 24'h00eaff)
+            $fatal(1,"Disconnect diagnostic readback failed");
+        repeat(10) @(negedge clk);
+        if({fault_register,fault_expected,fault_observed} !== 24'h00eaff)
+            $fatal(1,"First fault was not preserved");
         sensor.disconnected=0; sensor.ignore_config=1; restart; wait(error);
         if(init_done) $fatal(1,"Bad configuration readback accepted");
-        sensor.ignore_config=0; sensor.who=0; restart; wait(error);
+        if({fault_register,fault_expected,fault_observed} !== 24'h011900)
+            $fatal(1,"Configuration diagnostic readback failed");
+        sensor.ignore_config=0; sensor.ignore_user_ctrl=1; restart; wait(error);
+        if(init_done || {fault_register,fault_expected,fault_observed} !== 24'h031000 ||
+            !dut.user_ctrl_retried) $fatal(1,"Persistent USER_CTRL failure bypassed verification/retry");
+        sensor.ignore_user_ctrl=0; sensor.who=0; restart; wait(error);
+        if({fault_register,fault_expected,fault_observed} !== 24'h00ea00)
+            $fatal(1,"Startup identity diagnostic failed");
         sensor.who=8'hea; sensor.ready_enable=1; restart; wait(init_done);
+        if({fault_register,fault_expected,fault_observed} !== 0)
+            $fatal(1,"Reset did not clear diagnostics");
+        sensor.drop_user_ctrl_once=1; restart; wait(init_done || error); #1;
+        if(error || !dut.user_ctrl_retried || sensor.registers[3] != 8'h10)
+            $fatal(1,"Dropped USER_CTRL write did not recover and verify");
         request; wait(!cs); repeat(10) @(negedge clk);
         restart; wait(init_done); request; wait(data_valid);
         $display("PASS: imu_spi bank/reset recovery, timing, config readback, signed bursts, freshness and disconnect");
