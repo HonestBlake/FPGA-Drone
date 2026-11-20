@@ -16,6 +16,12 @@ module ImuEstimator_tb;
         .sample_valid(sample_valid), .calibrated(calibrated), .fault(fault), .valid(valid),
         .recover_request(recover_request), .fault_reason(fault_reason),
         .roll_cd(roll), .pitch_cd(pitch), .roll_rate_cdps(rx), .pitch_rate_cdps(ry), .yaw_rate_cdps(rz));
+    wire soft_valid,soft_fault,soft_clip;
+    ImuEstimator #(.CLK_FREQ(10_000_000),.CALIBRATION_SAMPLES(4),.TIMEOUT_MS(10),
+        .RECOVERY_ENABLED(1),.ALLOW_ACCEL_CLIPPING(1)) impact_tolerant(
+        .clk(clk),.rst(rst),.raw_valid(raw_valid),.sensor_ready(ready),.sensor_fault(sensor_fault),
+        .accel_x(ax),.accel_y(ay),.accel_z(az),.gyro_x(gx),.gyro_y(gy),.gyro_z(gz),
+        .recover_request(recover_request),.valid(soft_valid),.fault(soft_fault),.accel_clipped(soft_clip));
     task restart;
         begin
             @(negedge clk); rst=1; raw_valid=0;
@@ -86,6 +92,7 @@ module ImuEstimator_tb;
         az=32767; sample;
         if(!fault || valid || fault_reason != 3) $fatal(1,"Accel clipping reason failed");
         repeat(3) sample;
+        if(!soft_valid || soft_fault || !soft_clip) $fatal(1,"Impact-tolerant gyro estimate invalidated by acceleration clip");
         if(!fault || valid) $fatal(1,"Persistent saturation auto-cleared");
         az=16384; recover_request=0; repeat(4) sample;
         if(!fault || valid || fault_reason != 3) $fatal(1,"Recovery ignored parent permission");

@@ -4,6 +4,14 @@
 # uart_data/valid and display_* write ports belong to internal FPGA logic.
 # The board wrapper must also supply a synchronized reset and a clock constraint.
 
+# Scaled battery input: VAUX6 on JXADC XA1_P / XA1_N (channel default = 6).
+# P receives 0..1 V representing 0..16 V pack; N connects to analog ground.
+set_property -dict { PACKAGE_PIN J3 IOSTANDARD LVCMOS33 } [get_ports battery_vin_p]
+set_property -dict { PACKAGE_PIN K3 IOSTANDARD LVCMOS33 } [get_ports battery_vin_n]
+
+# Onboard LD0 for beacon timing demonstration (active high).
+set_property -dict { PACKAGE_PIN U16 IOSTANDARD LVCMOS33 } [get_ports beacon_led]
+
 # FPGA TX -> onboard USB-UART bridge -> host COM port (PROG/J4 USB connector).
 set_property -dict { PACKAGE_PIN A18 IOSTANDARD LVCMOS33 } [get_ports uart_tx]
 

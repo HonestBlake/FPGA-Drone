@@ -1,3 +1,6 @@
+`include "../support/XadcModel.vh"
+`include "../../Drone/System/BatteryMonitor.v"
+`include "../../Drone/System/LedBlinker.v"
 `include "../../Drone/System/TickGenerator.v"
 `include "../../Drone/UartTransmitter.v"
 `include "../../Drone/System/UartOutput.v"
@@ -8,13 +11,30 @@ module System_tb;
     reg clk = 0, rst = 1;
     wire control_tick;
     `include "../support/SystemOutputChecks.vh"
+    wire [11:0] battery_raw;
+    wire [15:0] battery_mv;
+    wire [6:0] battery_percent;
+    wire battery_valid, battery_sample_valid, beacon_led;
+    initial begin
+        wait (!rst);
+        dut.battery_monitor.xadc.sample_code = 12'd2765; // 10.801 V -> 50%
+        repeat (40) @(negedge clk);
+        if (battery_raw !== 2765 || battery_mv !== 10801 || battery_percent !== 50 ||
+            battery_valid !== 1 || beacon_led !== 1)
+            $fatal(1, "Battery/beacon integration");
+    end
+
     integer tick_phase = 0;
     always #50 clk = ~clk;
     System #(
-        .CLK_FREQ(10_000_000), .CONTROL_TICK_FREQ(1_000_000),
+        .CLK_FREQ(10_000_000), .BATTERY_FILTER_SAMPLES(1), .BATTERY_UPDATE_HZ(10_000_000), .CONTROL_TICK_FREQ(1_000_000),
         .UART_BAUD_RATE(1_000_000), .UART_FIFO_DEPTH(2),
         .DISPLAY_REFRESH_HZ(25_000), .DISPLAY_BLANK_CYCLES(3)
     ) dut (
+        .battery_vin_p(1'b1), .battery_vin_n(1'b0),
+        .battery_raw(battery_raw), .battery_mv(battery_mv), .battery_percent(battery_percent),
+        .battery_valid(battery_valid), .battery_sample_valid(battery_sample_valid),
+        .beacon_led(beacon_led),
         .clk(clk), .rst(rst), .control_tick(control_tick),
         .uart_data(uart_data), .uart_valid(uart_valid), .uart_ready(uart_ready),
         .uart_busy(uart_busy), .uart_tx(uart_tx), .display_write(display_write),

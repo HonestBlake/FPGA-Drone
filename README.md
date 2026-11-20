@@ -1,6 +1,19 @@
 # FPGA drone project
 
-[`vivado flight test/`](vivado%20flight%20test/README.md) integrates radio on JB1,
+Latest rewired bench test: [`vivado/battery lights flight test/`](vivado/battery%20lights%20flight%20test/README.md).
+It uses radio JC1, ESC channels JB1-JB4, external lights JB7-JB9, battery
+sense JXADC1/JXADC7, SW15 arm, and CH8/SwB prop lights and CH9/SwC head/landing lights. Normal display
+shows `CnFG` during IMU setup, then defaults to `rdy` disarmed or `Arnd` armed; SW7 selects throttle, SW8 signed roll, SW13 battery and SW14
+error codes (E000 if clear). LD13 is battery status and LD14 error/view status.
+CH7/SwA and CH10/SwD requests show on LD11/LD12; AI and hover are inactive.
+Motor channels 0/1/2/3 are back-left/front-left/back-right/front-right.
+Lidar C/R on JC7 and D/T on JC8 feeds an 8x8 USB depth viewer; LD9 is lidar
+health; LD10 is ultrasonic range status (JC3 trigger/JC4 divided echo).
+SW10 shows ultrasonic mm, SW9 lidar centre-four mm; hover control stays inactive; there is no ESC return status.
+Rotor directions and stabilization signs still require bench checks.
+The earlier test described below retains its original pin assignments.
+
+[`vivado/imu flight test/`](vivado/imu%20flight%20test/README.md) integrates radio on JB1,
 IMU CS/MISO/SCLK/MOSI on JA1-JA4, the shared controller's full-control profile,
 throttle display, and motor selection. It excludes lidar/NPU. Motor order is
 SW0 back-left, SW1 front-left, SW2 back-right, SW3 front-right on JA7-JA10.
@@ -47,9 +60,12 @@ Drone/
     TickGenerator.v
     UartOutput.v
     SevenSegmentDisplay.v
+    BatteryMonitor.v
+    LedBlinker.v
 ```
 
-`System` generates `control_tick` and provides host UART output and the Basys3
+`System` reads scaled battery voltage through XADC, estimates battery percentage,
+and drives a 60-flash/minute beacon. It generates `control_tick` and provides host UART output and the Basys3
 seven-segment display driver. `PeripheralInterface` contains the FS-iA6B radio,
 SparkFun SEN-15335 ICM-20948 SPI IMU, SEN0628 8x8 lidar array, and four-motor ESC output. `Drone` forwards decoded
 controls and the system tick
@@ -131,3 +147,14 @@ For Vivado, add all `.v` files under `Drone/` recursively and select `Drone` as 
 The source files do not include one another. Add only the relevant testbench as a
 simulation source when using its includes; do not compile those included design
 files a second time in the same simulation. The supplied automated tests use Icarus.
+
+## November 18 stabilization test profile
+
+Latest battery/lights test tolerates clipped accelerometer samples by using gyro
+attitude prediction for those samples, while retaining critical IMU health and
+small-angle-envelope interlocks. Relative yaw hold adds a neutral-stick deadband
+and bounded integrated heading error. No compass reference is integrated yet.
+The experimental [position estimator](Drone/FlightController/POSITION.md) drives
+SW11 X / SW12 Y signed-centimetre diagnostic views only; it is not position hold
+and cannot influence motor commands. Motor order/spin were reconfirmed as
+BL CW / FL CCW / BR CCW / FR CW (channels 0..3, viewed from above).

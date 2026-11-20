@@ -3,7 +3,7 @@
 `FlightTest` connects the shared radio, physical ICM-20948 SPI driver,
 calibration/attitude estimator, flight controller, ESC drivers, control timer,
 and display. There is **no lidar/IR or NPU instance**. It compiles the sources
-directly from `../Drone/`, so IMU changes apply to the whole project and this
+directly from `../../Drone/`, so IMU changes apply to the whole project and this
 test together. Earlier hardware-test snapshots are preserved.
 
 This is a small-angle control prototype, not a flight-validated autopilot.
@@ -246,7 +246,7 @@ to them; the wrapper handles that frequency forwarding.
 From the repository root:
 
 ```powershell
-& '.\vivado flight test\Run-Test.ps1'
+& '.\vivado tests\imu flight test\Run-Test.ps1'
 & '.\Run-Tests.ps1'
 ```
 

@@ -1,5 +1,5 @@
-# From the Vivado Tcl console: source {C:/path/to/FPGA Lab/vivado test/create_project.tcl}
-# Or: vivado -mode batch -source "vivado test/create_project.tcl"
+# From the Vivado Tcl console: source {C:/path/to/FPGA Lab/vivado tests/radio display test/create_project.tcl}
+# Or: vivado -mode batch -source "vivado tests/radio display test/create_project.tcl"
 set test_dir [file dirname [file normalize [info script]]]
 create_project radio_display_test [file join $test_dir build] -part xc7a35tcpg236-1
 add_files -norecurse [glob [file join $test_dir src *.v]]

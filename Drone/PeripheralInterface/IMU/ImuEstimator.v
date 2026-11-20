@@ -5,7 +5,8 @@ module ImuEstimator #(
     parameter integer CLK_FREQ = 100_000_000,
     parameter integer CALIBRATION_SAMPLES = 256,
     parameter integer TIMEOUT_MS = 100,
-    parameter integer RECOVERY_ENABLED = 0
+    parameter integer RECOVERY_ENABLED = 0,
+    parameter integer ALLOW_ACCEL_CLIPPING = 0
 ) (
     input wire clk, rst, raw_valid, sensor_ready, sensor_fault,
     input wire signed [15:0] accel_x, accel_y, accel_z,
@@ -15,7 +16,8 @@ module ImuEstimator #(
     output reg signed [15:0] roll_cd, pitch_cd,
     output reg signed [15:0] roll_rate_cdps, pitch_rate_cdps, yaw_rate_cdps,
     input wire recover_request,
-    output reg [3:0] fault_reason
+    output reg [3:0] fault_reason,
+    output reg accel_clipped
 );
     localparam integer TIMEOUT_CYCLES = (CLK_FREQ/1000)*TIMEOUT_MS;
     reg [31:0] age;
@@ -23,7 +25,7 @@ module ImuEstimator #(
     reg signed [31:0] roll_q16, pitch_q16;
     integer ax, ay, az, gx, gy, gz, rx, ry, rz, gravity_squared;
     integer accel_roll, accel_pitch;
-    reg stationary, gravity_ok;
+    reg stationary, gravity_ok, accel_saturated;
     reg signed [63:0] predicted_roll, predicted_pitch;
     // Recovery restarts only the estimator. Fresh stationary data and explicit
     // parent permission are required; full calibration still precedes validity.
@@ -34,12 +36,14 @@ module ImuEstimator #(
     always @* begin
         ax = accel_x; ay = accel_y; az = accel_z;
         gx = gyro_x; gy = gyro_y; gz = gyro_z;
+        accel_saturated = ax >= 32700 || ax <= -32700 || ay >= 32700 ||
+                          ay <= -32700 || az >= 32700 || az <= -32700;
         stationary = ax >= -1024 && ax <= 1024 && ay >= -1024 && ay <= 1024 &&
             az >= 15564 && az <= 17204 && gx >= -262 && gx <= 262 &&
             gy >= -262 && gy <= 262 && gz >= -262 && gz <= 262;
         // Limit components before squaring to prevent signed integer overflow.
         gravity_squared = (ax/4)*(ax/4) + (ay/4)*(ay/4) + (az/4)*(az/4);
-        gravity_ok = az > 12000 && gravity_squared >= 10737418 && gravity_squared <= 24159191;
+        gravity_ok = !accel_saturated && az > 12000 && gravity_squared >= 10737418 && gravity_squared <= 24159191;
         // sin(theta) ~ theta near level; bounded to the prototype's small angles.
         accel_roll = ay * 5730 / 16384;
         accel_pitch = ax * 5730 / 16384;
@@ -64,6 +68,7 @@ module ImuEstimator #(
         if (rst || recovery_start) begin
             sample_valid <= 0; calibrated <= 0; fault <= 0; age <= 0;
             fault_reason <= 0;
+            accel_clipped <= 0;
             count <= 0; sum_x <= 0; sum_y <= 0; sum_z <= 0;
             bias_x <= 0; bias_y <= 0; bias_z <= 0;
             roll_q16 <= 0; pitch_q16 <= 0; roll_cd <= 0; pitch_cd <= 0;
@@ -80,6 +85,7 @@ module ImuEstimator #(
             if (raw_valid && sensor_ready && !sensor_fault && !fault &&
                 (!calibrated || age < TIMEOUT_CYCLES)) begin
                 age <= 0;
+                accel_clipped <= accel_saturated;
                 if (!calibrated) begin
                     if (!stationary || (age >= TIMEOUT_CYCLES && count != 0)) begin
                         count <= 0; sum_x <= 0; sum_y <= 0; sum_z <= 0;
@@ -95,8 +101,7 @@ module ImuEstimator #(
                         count <= count+1; sum_x <= sum_x+gx; sum_y <= sum_y+gy; sum_z <= sum_z+gz;
                     end
                 end else if (gx >= 32700 || gx <= -32700 || gy >= 32700 || gy <= -32700 ||
-                             gz >= 32700 || gz <= -32700 || ax >= 32700 || ax <= -32700 ||
-                             ay >= 32700 || ay <= -32700 || az >= 32700 || az <= -32700 ||
+                             gz >= 32700 || gz <= -32700 || (!ALLOW_ACCEL_CLIPPING && accel_saturated) ||
                              rx > 32767 || rx < -32768 || ry > 32767 || ry < -32768 ||
                              rz > 32767 || rz < -32768 ||
                              predicted_roll > 35*100*64'sd65536 || predicted_roll < -35*100*64'sd65536 ||
@@ -120,7 +125,8 @@ module ImuEstimator #(
     end
     // synthesis translate_off
     initial begin
-        if ((RECOVERY_ENABLED != 0 && RECOVERY_ENABLED != 1) ||
+        if ((ALLOW_ACCEL_CLIPPING!=0 && ALLOW_ACCEL_CLIPPING!=1) ||
+            (RECOVERY_ENABLED != 0 && RECOVERY_ENABLED != 1) ||
             CLK_FREQ < 1000 || CALIBRATION_SAMPLES < 2 || CALIBRATION_SAMPLES > 4096 ||
             TIMEOUT_MS <= 0 || TIMEOUT_CYCLES < 2)
             $fatal(1, "ImuEstimator: invalid timing or calibration count");

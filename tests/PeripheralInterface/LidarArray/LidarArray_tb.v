@@ -1,3 +1,6 @@
+`include "../../support/XadcModel.vh"
+`include "../../../Drone/System/BatteryMonitor.v"
+`include "../../../Drone/System/LedBlinker.v"
 `include "../../../Drone/PeripheralInterface/UartReceiver.v"
 `include "../../../Drone/PeripheralInterface/IMU/imu_spi.v"
 `include "../../../Drone/PeripheralInterface/IMU/ImuEstimator.v"
@@ -53,6 +56,7 @@ module LidarArray_tb;
         .CLK_FREQ(4_000_000), .LIDAR_STARTUP_MS(1), .LIDAR_SETTLE_MS(2),
         .LIDAR_POLL_MS(1), .LIDAR_RESPONSE_TIMEOUT_MS(30), .LIDAR_BYTE_TIMEOUT_MS(1)
     ) top_dut (
+        .battery_vin_p(1'b0), .battery_vin_n(1'b0),
         .clk(clk), .rst(rst), .ibus_rx(1'b1), .imu_spi_miso(1'b0),
         .imu_sample_valid(1'b0), .imu_valid(1'b0), .imu_calibrated(1'b0), .imu_fault(1'b0),
         .imu_roll_cd(16'sd0), .imu_pitch_cd(16'sd0),

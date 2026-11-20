@@ -38,7 +38,7 @@ foreach ($bench in $benches) {
 
 Write-Output "Layout OK: $($sources.Count) modules, $($benches.Count) mirrored testbenches."
 # Compile the source hierarchy independently of testbench includes.
-& $compiler -g2005 -Wall -s Drone -t null @($sources.FullName)
+& $compiler -g2005 -Wall -s Drone -t null @($sources.FullName) (Join-Path $testRoot 'support/XadcModel.vh')
 if ($LASTEXITCODE -ne 0) { throw 'Drone design compilation failed' }
 
 $selected = @($benches | Where-Object { ($_.BaseName -replace '_tb$', '') -like $Module } | Sort-Object FullName)

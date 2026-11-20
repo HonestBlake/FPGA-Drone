@@ -6,7 +6,8 @@ module SevenSegmentDisplay #(
     parameter integer CLK_FREQ = 100_000_000,
     parameter integer REFRESH_HZ = 250, // Complete four-digit sweeps per second.
     parameter integer BLANK_CYCLES = (CLK_FREQ / 100_000 < 2) ? 2 : CLK_FREQ / 100_000,
-    parameter integer F_IS_MINUS = 0 // Optional dash for board-test status.
+    parameter integer F_IS_MINUS = 0, // Optional dash for board-test status.
+    parameter integer STATUS_WORDS = 0 // C0F6=CnFG, ADBF=ready, A17D=Arnd.
 ) (
     input wire clk,
     input wire rst,
@@ -94,6 +95,28 @@ module SevenSegmentDisplay #(
                 if (counter == BLANK_CYCLES - 2) begin
                     // Leave one further clock for segment outputs to settle.
                     seg <= hex_segments(active_value[digit*4 +: 4]);
+                    if (STATUS_WORDS && active_value == 16'hc0f6) begin
+                        case (digit)
+                            3: seg <= 7'h46; // C
+                            2: seg <= 7'h2b; // n
+                            1: seg <= 7'h0e; // F
+                            0: seg <= 7'h42; // G
+                        endcase
+                    end else if (STATUS_WORDS && active_value == 16'ha17d) begin
+                        case (digit)
+                            3: seg <= 7'h08; // A
+                            2: seg <= 7'h2f; // r
+                            1: seg <= 7'h2b; // n (M approximation)
+                            0: seg <= 7'h21; // d
+                        endcase
+                    end else if (STATUS_WORDS && active_value == 16'hadbf) begin
+                        case (digit)
+                            3: seg <= 7'h7f; // blank
+                            2: seg <= 7'h2f; // r
+                            1: seg <= 7'h21; // d
+                            0: seg <= 7'h11; // y
+                        endcase
+                    end
                     dp <= !active_points[digit];
                 end
                 if (counter == BLANK_CYCLES - 1)

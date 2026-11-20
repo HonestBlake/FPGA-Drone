@@ -13,6 +13,7 @@ module FlightController_tb;
     integer cycle = 0;
     wire control_tick = run_ticks && cycle % 4 == 0;
     wire sample_valid = manual_sample || (stream_imu && cycle % 7 == 0);
+    wire can_arm;
     wire available, motors_armed, command_valid, imu_fresh, npu_fresh, avoidance_active;
     wire [2:0] applied_action;
     wire signed [15:0] pitch_sp, yaw_sp;
@@ -35,7 +36,7 @@ module FlightController_tb;
         .imu_roll_cd(imu_roll), .imu_pitch_cd(imu_pitch),
         .imu_roll_rate_cdps(imu_p), .imu_pitch_rate_cdps(imu_q), .imu_yaw_rate_cdps(imu_r),
         .npu_available(npu_available), .npu_action_valid(npu_action_valid), .npu_action(npu_action),
-        .available(available), .command_valid(command_valid), .motors_armed(motors_armed),
+        .available(available), .command_valid(command_valid), .motors_armed(motors_armed), .can_arm(can_arm),
         .imu_fresh(imu_fresh), .npu_fresh(npu_fresh), .avoidance_active(avoidance_active),
         .applied_action(applied_action), .pitch_setpoint_cd(pitch_sp),
         .yaw_rate_setpoint_cdps(yaw_sp), .thrust_setpoint(thrust_sp),
@@ -57,6 +58,21 @@ module FlightController_tb;
         .front_right_throttle(full_fr), .front_left_throttle(full_fl),
         .back_right_throttle(full_br), .back_left_throttle(full_bl)
     );
+    FlightController #(.CLK_FREQ(10_000), .IMU_TIMEOUT_MS(20),
+        .CONTROL_TIMEOUT_MS(5), .NPU_TIMEOUT_MS(10), .FULL_MANUAL_CONTROL(1), .YAW_HEADING_HOLD(1), .YAW_MIX_SIGN(-1)) heading_hold (
+        .clk(clk), .rst(rst), .control_tick(control_tick), .throttle(throttle),
+        .roll_command(roll_command), .pitch_command(pitch_command), .yaw_command(yaw_command),
+        .arm_request(arm_request), .avoidance_enable(avoidance_enable),
+        .frame_valid(frame_valid), .rc_valid(rc_valid), .motor_ready(motor_ready),
+        .imu_sample_valid(sample_valid), .imu_valid(imu_valid),
+        .imu_calibrated(imu_calibrated), .imu_fault(imu_fault),
+        .imu_roll_cd(imu_roll), .imu_pitch_cd(imu_pitch),
+        .imu_roll_rate_cdps(imu_p), .imu_pitch_rate_cdps(imu_q), .imu_yaw_rate_cdps(imu_r),
+        .npu_available(npu_available), .npu_action_valid(npu_action_valid), .npu_action(npu_action),
+        .roll_setpoint_cd(), .pitch_setpoint_cd(),
+        .front_right_throttle(), .front_left_throttle(),
+        .back_right_throttle(), .back_left_throttle()
+    );
     task step;
         input integer count;
         begin repeat (count) @(negedge clk); #1; end
@@ -71,7 +87,10 @@ module FlightController_tb;
     task rearm;
         begin
             throttle = 0;
-            radio_frame(0); radio_frame(1);
+            radio_frame(0);
+            if(!can_arm) $fatal(1,"Healthy OFF-frame permission missing");
+            radio_frame(1);
+            if(can_arm) $fatal(1,"Armed state still reports can_arm");
             if (!motors_armed) $fatal(1, "Healthy idle arm sequence rejected");
             if ({fr, fl, br, bl} !== 44'd0) $fatal(1, "Idle request spun motors");
             throttle = 500; step(8);
@@ -228,7 +247,24 @@ module FlightController_tb;
         rc_valid = 0; step(1); check_stop;
         rc_valid = 1; step(12); radio_frame(1); check_stop; rearm;
         arm_request = 0; step(1); check_stop;
-        rearm; rst = 1; step(1); check_stop;
+        rearm;
+        avoidance_enable=0; roll_command=0;pitch_command=0;yaw_command=10;
+        imu_roll=0;imu_pitch=0;imu_p=0;imu_q=0;imu_r=1000;step(500);
+        if(heading_hold.next_yaw!=0 || heading_hold.yaw_error_q16>=-30*65536)
+            $fatal(1,"Neutral yaw deadband / integrated heading error");
+        imu_r=0;step(20);
+        if(heading_hold.motor_fr<=heading_hold.motor_fl || heading_hold.motor_bl<=heading_hold.motor_br)
+            $fatal(1,"Heading correction lost at zero yaw rate / mixer sign");
+        imu_r=30000;step(2000);
+        if(heading_hold.yaw_error_q16!=-3000*65536) $fatal(1,"Heading integral bound");
+        yaw_command=100;step(10);
+        if(heading_hold.yaw_error_q16!=0) $fatal(1,"Pilot turn did not release heading hold");
+        yaw_command=0;imu_r=0;step(20);
+        if(heading_hold.yaw_error_q16!=0 || heading_hold.motor_fr!=heading_hold.motor_fl)
+            $fatal(1,"Heading target did not recapture on stick release");
+        throttle=0;step(10);
+        if(heading_hold.yaw_error_q16!=0) $fatal(1,"Idle integral reset");
+        rst = 1; step(1); check_stop;
         if (available || command_valid || imu_fresh || npu_fresh) $fatal(1, "Active reset status");
         $display("PASS: stabilization, mixing, arming, five NPU actions, gating, saturation, watchdogs and recovery");
         $finish;

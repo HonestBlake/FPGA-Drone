@@ -20,7 +20,10 @@ module FlightController #(
     parameter integer MAX_CORRECTION = 400,
     parameter integer FULL_MANUAL_CONTROL = 0,
     parameter integer MAX_ROLL_CD = 2000,
-    parameter integer YAW_MIX_SIGN = 1
+    parameter integer YAW_MIX_SIGN = 1,
+    parameter integer YAW_HEADING_HOLD = 0,
+    parameter integer YAW_HEADING_KP = 8,
+    parameter integer YAW_HEADING_MAX_CD = 3000
 ) (
     input wire clk,
     input wire rst,
@@ -51,6 +54,7 @@ module FlightController #(
     output wire imu_fresh,
     output wire npu_fresh,
     output wire motors_armed,
+    output wire can_arm, // Current health, idle threshold and OFF-frame permission.
     output reg avoidance_active,
     output reg [2:0] applied_action,
     output reg signed [15:0] pitch_setpoint_cd,
@@ -81,6 +85,25 @@ module FlightController #(
     reg signed [15:0] roll_cd, pitch_cd, roll_rate, pitch_rate, yaw_rate;
     reg [2:0] action_latched;
     reg [10:0] motor_fr, motor_fl, motor_br, motor_bl;
+    reg next_avoidance;
+    reg signed [31:0] yaw_error_q16;
+    reg signed [63:0] next_yaw_error;
+    // Relative gyro heading hold, not an absolute compass heading. Reset the
+    // target while turning, disarmed, idle, unhealthy or under avoidance control.
+    always @* begin
+        next_yaw_error = yaw_error_q16 -
+            (($signed(imu_yaw_rate_cdps)*64'sd65536)*($signed({1'b0,imu_age})+1))/CLK_FREQ;
+        if(next_yaw_error > YAW_HEADING_MAX_CD*64'sd65536)
+            next_yaw_error = YAW_HEADING_MAX_CD*64'sd65536;
+        if(next_yaw_error < -YAW_HEADING_MAX_CD*64'sd65536)
+            next_yaw_error = -YAW_HEADING_MAX_CD*64'sd65536;
+    end
+    always @(posedge clk) begin
+        if(rst || !YAW_HEADING_HOLD || !motors_armed || throttle<10 ||
+           $signed(yaw_command)>FORWARD_DEADBAND || $signed(yaw_command)<-FORWARD_DEADBAND ||
+           next_avoidance) yaw_error_q16 <= 0;
+        else if(imu_sample_valid && imu_fresh) yaw_error_q16 <= next_yaw_error;
+    end
 
     assign available = !rst;
     assign imu_fresh = !rst && imu_seen && imu_age < IMU_CYCLES &&
@@ -89,6 +112,8 @@ module FlightController #(
     assign command_valid = !rst && rc_valid && imu_fresh && motor_ready &&
                            control_seen && control_age < CONTROL_CYCLES;
     assign motors_armed = armed_state && command_valid && arm_request;
+    assign can_arm = !motors_armed && command_valid && arm_permit &&
+                     throttle <= ARM_MAX_THROTTLE;
     // Gate immediately on a health loss, without waiting for another control tick.
     assign front_right_throttle = motors_armed ? motor_fr : 11'd0;
     assign front_left_throttle  = motors_armed ? motor_fl : 11'd0;
@@ -163,7 +188,6 @@ module FlightController #(
 
     integer next_thrust, next_roll, next_pitch, next_yaw, base;
     integer roll_correction, pitch_correction, yaw_correction;
-    reg next_avoidance;
     reg [2:0] next_action;
     always @* begin
         next_thrust = (throttle > 1000) ? 1000 : throttle;
@@ -176,6 +200,8 @@ module FlightController #(
             (FULL_MANUAL_CONTROL && $signed(pitch_command) < -FORWARD_DEADBAND))
             next_pitch = -(clamp_axis($signed(pitch_command)) * MAX_PITCH_CD) / 500;
         next_yaw = (clamp_axis($signed(yaw_command)) * MAX_YAW_RATE_CDPS) / 500;
+        if(YAW_HEADING_HOLD && $signed(yaw_command)<=FORWARD_DEADBAND &&
+           $signed(yaw_command)>=-FORWARD_DEADBAND) next_yaw=0;
         next_avoidance = 0;
         next_action = CONTINUE;
         // Gate with ORIGINAL pilot intent, so STOP/turning does not self-cancel.
@@ -201,7 +227,9 @@ module FlightController #(
         // Small-angle PD roll/pitch controller; proportional yaw-rate feedback.
         roll_correction = clamp_correction(((next_roll - roll_cd) * ATTITUDE_KP - roll_rate * RATE_KD) / 256);
         pitch_correction = clamp_correction(((next_pitch - pitch_cd) * ATTITUDE_KP - pitch_rate * RATE_KD) / 256);
-        yaw_correction = YAW_MIX_SIGN * clamp_correction(((next_yaw - yaw_rate) * YAW_KP) / 256);
+        yaw_correction = YAW_MIX_SIGN * clamp_correction(
+            ((next_yaw - yaw_rate) * YAW_KP +
+             (YAW_HEADING_HOLD ? (yaw_error_q16/65536)*YAW_HEADING_KP : 0)) / 256);
         base = 48 + (next_thrust * 1999) / 1000;
     end
 
@@ -243,6 +271,8 @@ module FlightController #(
             ATTITUDE_KP < 0 || ATTITUDE_KP > 4096 || RATE_KD < 0 || RATE_KD > 4096 ||
             YAW_KP < 0 || YAW_KP > 4096 || MAX_CORRECTION < 0 || MAX_CORRECTION > 1999 ||
             (FULL_MANUAL_CONTROL != 0 && FULL_MANUAL_CONTROL != 1) || MAX_ROLL_CD < 0 || MAX_ROLL_CD > 4500 ||
+            (YAW_HEADING_HOLD!=0 && YAW_HEADING_HOLD!=1) || YAW_HEADING_KP<0 ||
+            YAW_HEADING_KP>4096 || YAW_HEADING_MAX_CD<0 || YAW_HEADING_MAX_CD>4500 ||
             (YAW_MIX_SIGN != 1 && YAW_MIX_SIGN != -1))
             $fatal(1, "FlightController: invalid timeout, limit, or gain");
     end

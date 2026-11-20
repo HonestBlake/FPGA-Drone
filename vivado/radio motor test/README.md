@@ -2,7 +2,7 @@
 
 Standalone `RadioMotorTest` top with copied radio, display, and motor modules.
 No flight controller, IMU, mixer, or radio arm channel is used. Target is the
-Basys3 `xc7a35tcpg236-1` with its 100 MHz clock. The earlier `vivado test/`
+Basys3 `xc7a35tcpg236-1` with its 100 MHz clock. The earlier `radio display test/`
 project is preserved.
 
 ## Connections
@@ -73,7 +73,7 @@ A stop affects the next packet; a packet already being transmitted completes.
 From the repository root:
 
 ```powershell
-& '.\vivado motor test\Run-Test.ps1'
+& '.\vivado tests\radio motor test\Run-Test.ps1'
 ```
 
 The simulation sends UART packets through the actual top, checks the physical

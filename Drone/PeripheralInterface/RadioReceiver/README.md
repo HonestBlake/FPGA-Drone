@@ -1,5 +1,9 @@
 # Radio receiver
 
+The requested transmitter switch functions and pending channel assignments are
+recorded in [RC_CONTROLS.md](../../../RC_CONTROLS.md). They are not enabled in
+the current bench image yet.
+
 `RadioReceiver` implements the FS-iA6B servo iBUS interface described below.
 Its helpers `IBusDecoder` and `RCMapper` live in this folder. `UartReceiver` is
 shared with the lidar and lives in `Drone/PeripheralInterface/UartReceiver.v`.

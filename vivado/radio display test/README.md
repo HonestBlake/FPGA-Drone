@@ -37,13 +37,13 @@ reset is released. Startup automatically resets the design.
 In Vivado's Tcl console, use the full path to this script, in braces for spaces:
 
 ```tcl
-source {C:/Users/blake/Programing/School Projects/FPGA Lab/vivado test/create_project.tcl}
+source {C:/Users/blake/Programing/School Projects/FPGA Lab/vivado tests/radio display test/create_project.tcl}
 ```
 
 Or, from the repository root in a Vivado-enabled shell:
 
 ```powershell
-vivado -mode batch -source "vivado test/create_project.tcl"
+vivado -mode batch -source "vivado tests/radio display test/create_project.tcl"
 ```
 
 Open `build/radio_display_test.xpr` if created in batch mode. Run synthesis,
@@ -99,7 +99,7 @@ changes in `Drone/` do not propagate here automatically.
 Run the standalone self-checking simulation from the repository root:
 
 ```powershell
-& '.\vivado test\Run-Test.ps1'
+& '.\vivado tests\radio display test\Run-Test.ps1'
 ```
 
 It sends serial iBUS packets through the actual top and verifies physical

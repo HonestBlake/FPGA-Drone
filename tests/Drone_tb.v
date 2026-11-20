@@ -1,3 +1,6 @@
+`include "support/XadcModel.vh"
+`include "../Drone/System/BatteryMonitor.v"
+`include "../Drone/System/LedBlinker.v"
 `include "../Drone/PeripheralInterface/IMU/imu_spi.v"
 `include "../Drone/PeripheralInterface/IMU/ImuEstimator.v"
 `include "../Drone/PeripheralInterface/IMU/IMU.v"
@@ -24,6 +27,19 @@ module Drone_tb;
     `include "support/RadioInterfaceChecks.vh"
     `undef DRONE_FLIGHT_TEST
     `include "support/SystemOutputChecks.vh"
+    wire [11:0] battery_raw;
+    wire [15:0] battery_mv;
+    wire [6:0] battery_percent;
+    wire battery_valid, battery_sample_valid, beacon_led;
+    initial begin
+        wait (!rst);
+        dut.system.battery_monitor.xadc.sample_code = 12'd2765; // 10.801 V -> 50%
+        repeat (40) @(negedge clk);
+        if (battery_raw !== 2765 || battery_mv !== 10801 || battery_percent !== 50 ||
+            battery_valid !== 1 || beacon_led !== 1)
+            $fatal(1, "Battery/beacon integration");
+    end
+
     wire control_tick, npu_available, flight_controller_available, motors_armed;
     wire [3:0] esc;
     wire motor_ready, motor_busy;
@@ -37,12 +53,13 @@ module Drone_tb;
     wire checked_busy = check_physical ? physical_busy : motor_busy;
     // Default hardware selection: this instance receives sensor bytes at SPI
     // pins and real iBUS packets, with no external attitude/health inputs.
-    Drone #(.CLK_FREQ(10_000_000), .BAUD_RATE(1_000_000), .TIMEOUT_MS(100),
+    Drone #(.CLK_FREQ(10_000_000), .BATTERY_FILTER_SAMPLES(1), .BATTERY_UPDATE_HZ(10_000_000), .BAUD_RATE(1_000_000), .TIMEOUT_MS(100),
         .BYTE_TIMEOUT_US(50), .ROLL_CHANNEL(14), .PITCH_CHANNEL(3), .THROTTLE_CHANNEL(2),
         .YAW_CHANNEL(4), .ARM_CHANNEL(6), .MODE_CHANNEL(5), .SWITCH_THRESHOLD(1750),
         .IMU_POWERUP_CYCLES(20), .IMU_RESET_CYCLES(20), .IMU_WAKE_CYCLES(20),
         .IMU_CALIBRATION_SAMPLES(2), .IMU_TIMEOUT_MS(10),
         .MOTOR_STARTUP_MS(1), .MOTOR_UPDATE_HZ(10_000)) physical (
+        .battery_vin_p(1'b0), .battery_vin_n(1'b0),
         .clk(clk), .rst(physical_rst), .ibus_rx(ibus_rx), .imu_spi_miso(physical_miso),
         .imu_spi_cs_n(physical_cs), .imu_spi_sclk(physical_sclk), .imu_spi_mosi(physical_mosi),
         .imu_sensor_calibrated(physical_calibrated), .imu_sensor_valid(physical_valid),
@@ -69,7 +86,7 @@ module Drone_tb;
     wire imu_sample_valid = imu_stream && flight_cycle % 100 == 0;
     always @(negedge clk) flight_cycle = flight_cycle + 1;
     Drone #(
-        .CLK_FREQ(10_000_000), .BAUD_RATE(1_000_000), .FC_YAW_MIX_SIGN(1),
+        .CLK_FREQ(10_000_000), .BATTERY_FILTER_SAMPLES(1), .BATTERY_UPDATE_HZ(10_000_000), .BAUD_RATE(1_000_000), .FC_YAW_MIX_SIGN(1),
         .TIMEOUT_MS(1), .BYTE_TIMEOUT_US(50),
         .ROLL_CHANNEL(14), .PITCH_CHANNEL(3), .THROTTLE_CHANNEL(2),
         .YAW_CHANNEL(4), .ARM_CHANNEL(6), .MODE_CHANNEL(5), .SWITCH_THRESHOLD(1750),
@@ -77,6 +94,10 @@ module Drone_tb;
         .DISPLAY_REFRESH_HZ(25_000), .DISPLAY_BLANK_CYCLES(3),
         .MOTOR_UPDATE_HZ(10_000), .MOTOR_STARTUP_MS(1), .USE_EXTERNAL_NPU(1), .USE_EXTERNAL_IMU(1)
     ) dut (
+        .battery_vin_p(1'b1), .battery_vin_n(1'b0),
+        .battery_raw(battery_raw), .battery_mv(battery_mv), .battery_percent(battery_percent),
+        .battery_valid(battery_valid), .battery_sample_valid(battery_sample_valid),
+        .beacon_led(beacon_led),
         .clk(clk), .rst(rst), .imu_spi_miso(1'b0), .ibus_rx(ibus_rx), .throttle(throttle),
         .roll_command(roll_command), .pitch_command(pitch_command),
         .yaw_command(yaw_command), .arm_request(arm_request),

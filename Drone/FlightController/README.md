@@ -1,5 +1,9 @@
 # Flight-computer prototype
 
+The standalone [experimental height-hold helper](HOVER.md) and HC-SR04 driver
+have been added for future integration. They are not instantiated or enabled in
+this controller or the uploaded hardware test. The behavior below is unchanged.
+
 `FlightController` consumes the mapped radio commands, a fused IMU estimate,
 and an optional front-facing obstacle action. It generates four ordinary DShot
 throttles for the existing `MotorControl`. It updates stabilization and all four
@@ -226,3 +230,21 @@ The full suite checks the existing peripheral and system behavior too.
 
 These tests verify digital behavior. There is no simulated airframe dynamics,
 Vivado timing result, physical IMU, or flight validation in this prototype.
+
+`can_arm` is a read-only status output: healthy command path, a previously
+accepted healthy arm-OFF frame, throttle within ARM_MAX_THROTTLE, and not
+currently armed. It does not bypass the next arm-ON frame or change motor logic.
+The bench top uses it for LD15 blinking and its default ready message.
+
+## Relative yaw hold option
+
+YAW_HEADING_HOLD=1 (enabled by the latest bench top) applies a neutral yaw-stick
+deadband and adds a gyro-integrated heading-error term to the existing yaw-rate
+feedback. The hold target follows pilot turns and recaptures when the stick
+returns to centre. Error is bounded at 30 degrees by default; all integral state
+clears while disarmed, idle, unhealthy, or under avoidance control. It is relative
+gyro heading hold, not absolute compass lock: gyro bias and mounting errors can
+still drift. Gains remain prototype values requiring physical verification.
+The generic shared default remains the original rate-only controller.
+
+The [position diagnostic](POSITION.md) is separate and never feeds motor commands.
