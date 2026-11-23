@@ -11,7 +11,8 @@ module NPU_tb;
     reg [15:0] vectors [0:VECTOR_COUNT*64-1];
     reg signed [31:0] expected_scores [0:VECTOR_COUNT*5-1];
     reg [2:0] expected_class [0:VECTOR_COUNT-1];
-    integer cycle, frame, index, pulses=0;
+    reg expected_confident [0:VECTOR_COUNT-1];
+    integer cycle, frame, index, pulses=0,accepted=0;
     always #5 clk = ~clk;
     NPU #(.ENABLE(1),.WEIGHTS_FILE("../../Drone/NPU/weights.mem"),
         .BIASES_FILE("../../Drone/NPU/biases.mem")) dut (
@@ -37,15 +38,18 @@ module NPU_tb;
         for(frame=0;frame<VECTOR_COUNT;frame=frame+1) begin
             for(index=0;index<64;index=index+1) put(index,vectors[frame*64+index]);
             @(negedge clk);pixel_valid=0;
-            wait(action_valid);#1;
-            if(!available || action!==expected_class[frame]) $fatal(1,"Reference class frame %0d",frame);
+            wait(dut.inference.result_pulse);#1;
+            if(dut.inference.prediction!==expected_class[frame] || available!==expected_confident[frame] ||
+               action_valid!==expected_confident[frame] || action!==(expected_confident[frame] ? expected_class[frame] : 3'd7))
+                $fatal(1,"Reference class/confidence frame %0d",frame);
+            if(expected_confident[frame])accepted=accepted+1;
             for(index=0;index<5;index=index+1)
                 if(dut.inference.scores[index]!==expected_scores[frame*5+index])
                     $fatal(1,"Reference score frame %0d neuron %0d",frame,index);
             repeat(4) @(negedge clk);
             if(action_valid) $fatal(1,"Result pulse held high");
         end
-        if(pulses!=VECTOR_COUNT) $fatal(1,"Repeated frame result count %0d",pulses);
+        if(pulses!=accepted) $fatal(1,"Accepted frame result count %0d expected %0d",pulses,accepted);
         healthy=0;#1;if(available || action_valid) $fatal(1,"Unhealthy output not gated");
         repeat(3) @(negedge clk);healthy=1;
         repeat(80) @(negedge clk);if(available) $fatal(1,"Old prediction resurrected");
@@ -53,7 +57,7 @@ module NPU_tb;
         @(negedge clk);pixel_valid=0;repeat(10) @(negedge clk);rst=1;
         repeat(3) @(negedge clk);rst=0;repeat(80) @(negedge clk);
         if(available || action_valid) $fatal(1,"Reset did not abort inference");
-        $display("PASS: NPU actual weights, five classes/scores, signed input extremes, repeated/partial frames, health, reset and disabled default");
+        $display("PASS: NPU model scores, confident/rejected classes, unknown instead of Continue, repeated/partial frames, health/reset and disabled default");
         $finish;
     end
     initial begin #1000000;$fatal(1,"NPU watchdog");end

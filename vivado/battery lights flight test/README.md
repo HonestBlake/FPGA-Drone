@@ -1,5 +1,39 @@
 # Battery, lights, and flight-control bench test
 
+## NPU confidence update - November 23, 2026
+
+Flight-control tuning is paused. SW9 remains display-only NPU output; no
+classifier action is connected to motor overrides.
+
+A command now requires a unique winning raw score >=4096, a runner-up lead
+>=4096, and a lead >=25% of the winner's magnitude. All classes, including
+Continue, face the same conditions. A rejected frame clears any previous
+prediction and displays dashes. LD9 remains lidar freshness and can be solid
+while SW9 shows an uncertain result. These are initial raw-score heuristics,
+not calibrated probabilities. See [NPU guide](../../Drone/NPU/README.md).
+
+The requested new model files have not been located: the two files currently
+in `Drone/NPU` match the previous image's hashes, and GitHub main at `ba7733d`
+contains the same contents. Confidence changes are being validated against
+that existing model while awaiting the updated file location. No new-model
+upload has occurred.
+
+Validation so far:
+- Six selected NPU module tests passed, covering raw scores and filtered output,
+  all five classes, low-score rejection, absolute/relative boundaries, ties,
+  negative scores, full signed-range subtraction, health/reset and disabled mode.
+- Lidar UART board simulation passed with actual model arithmetic: accepted
+  command display, an ambiguous frame clearing an accepted command, dashes
+  with healthy lidar, all five labels, unchanged USB pixels/checksum and
+  disconnected motor overrides.
+- Existing-model confidence bitstream passed timing and DRC checks:
+  16,905 placed LUTs (81.27%), 46 DSPs (51.11%), WNS +6.990ns, WHS +0.022ns,
+  zero failing endpoints. Build log: `build_npu_confidence.log`.
+- Bitstream SHA256:
+  `C5AB95B357CEE4769ACA848CE32ADB3ED7BDBA58EA6150E31E39A17390D64136`.
+  This image has not been uploaded. The board retains its previous image;
+  the pending request needs the actual new model files before programming.
+
 ## Pitch diagnostics - November 23, 2026
 
 Yaw flight feedback after the gain trial: the airframe may move about 10deg

@@ -12,6 +12,8 @@ Motor channels 0/1/2/3 are back-left/front-left/back-right/front-right.
 Lidar C/R on JC7 and D/T on JC8 feeds an 8x8 USB depth viewer; LD9 is lidar
 health; LD10 is ultrasonic range status (JC3 trigger/JC4 divided echo).
 SW10 shows ultrasonic mm and SW9 the NPU command (Cont/LEFt/rIGt/uP/StoP).
+The pending NPU confidence update shows dashes for weak or tied winners and
+requires minimum score plus absolute/relative margins for every class.
 Hover entry requires all four motors selected, actual arming, healthy inputs,
 fresh range and throttle >=100/1000. SW15 still immediately disarms. See
 [height-hold behavior and failure policy](Drone/FlightController/HOVER.md).

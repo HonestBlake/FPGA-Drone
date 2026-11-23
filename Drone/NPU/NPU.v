@@ -5,7 +5,8 @@
 // contract; the board test enables inference, never motor overrides.
 module NPU #(
     parameter integer ENABLE = 0,
-    parameter WEIGHTS_FILE = "weights.mem", BIASES_FILE = "biases.mem"
+    parameter WEIGHTS_FILE = "weights.mem", BIASES_FILE = "biases.mem",
+    parameter integer MIN_SCORE = 4096, MIN_MARGIN = 4096, RELATIVE_MARGIN_SHIFT = 2
 )(
     input wire clk, rst,
     output wire available, action_valid,
@@ -26,27 +27,32 @@ module NPU #(
         always @(posedge clk) if (accept_pixel) pixels[pixel_address]<=pixel_mm;
         wire [5:0] address;
         wire [2:0] prediction;
-        wire done;
+        wire done, prediction_confident;
         wire signed [31:0] scores [0:4];
         wire done_array [0:4];
         layer #(.N_NEURON(5), .N_INPUTS(64),
-            .WEIGHTS_FILE(WEIGHTS_FILE), .BIASES_FILE(BIASES_FILE)) classifier (
+            .WEIGHTS_FILE(WEIGHTS_FILE), .BIASES_FILE(BIASES_FILE),
+            .MIN_SCORE(MIN_SCORE), .MIN_MARGIN(MIN_MARGIN),
+            .RELATIVE_MARGIN_SHIFT(RELATIVE_MARGIN_SHIFT)) classifier (
             .clk(clk), .rst(rst || !healthy || !running),
             .lidar_x(pixels[address]), .lidar_address(address),
             .results(scores), .done_array(done_array),
-            .prediction(prediction), .prediction_valid(done));
+            .prediction(prediction), .prediction_valid(done), .prediction_confident(prediction_confident));
         assign available = have_prediction && healthy && !rst;
-        assign action_valid = result_pulse && healthy && !rst;
+        assign action_valid = result_pulse && have_prediction && healthy && !rst;
         assign action = result;
         always @(posedge clk) begin
             if (rst || !healthy) begin
-                loaded<=0; running<=0; have_prediction<=0; result_pulse<=0; result<=0;
+                loaded<=0; running<=0; have_prediction<=0; result_pulse<=0; result<=3'd7;
             end else begin
                 result_pulse<=0;
                 if (running) begin
                     // The private snapshot cannot change during inference.
                     if (done) begin
-                        result<=prediction; result_pulse<=1; have_prediction<=1;
+                        // Reject ambiguity for every class, including Continue.
+                        // A rejected fresh frame clears the previous prediction.
+                        result<=prediction_confident ? prediction : 3'd7;
+                        result_pulse<=1; have_prediction<=prediction_confident;
                         running<=0; loaded<=0;
                     end
                 end else if (pixel_valid) begin

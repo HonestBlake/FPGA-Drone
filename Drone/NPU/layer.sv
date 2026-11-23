@@ -10,7 +10,8 @@
 module layer #(
     parameter N_NEURON = 5,
     parameter N_INPUTS = 64,
-    parameter WEIGHTS_FILE = "weights.mem", BIASES_FILE = "biases.mem"
+    parameter WEIGHTS_FILE = "weights.mem", BIASES_FILE = "biases.mem",
+    parameter integer MIN_SCORE = 4096, MIN_MARGIN = 4096, RELATIVE_MARGIN_SHIFT = 2
 )(
     input wire clk,
     input wire rst,
@@ -23,7 +24,8 @@ module layer #(
     output wire signed [31:0] results [0:N_NEURON-1],
     output wire done_array [0:N_NEURON-1],
     output wire [2:0] prediction,
-    output wire prediction_valid
+    output wire prediction_valid,
+    output wire prediction_confident
 );
 
     reg [7:0] counter;
@@ -86,9 +88,10 @@ module layer #(
     end
 
     // Select the neuron with the highest score
-    argmax classifier (
+    argmax #(.MIN_SCORE(MIN_SCORE), .MIN_MARGIN(MIN_MARGIN),
+             .RELATIVE_MARGIN_SHIFT(RELATIVE_MARGIN_SHIFT)) classifier (
         .scores(results),
-        .prediction(prediction)
+        .prediction(prediction), .confident(prediction_confident)
     );
 
     assign prediction_valid = &{

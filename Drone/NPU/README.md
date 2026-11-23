@@ -3,7 +3,8 @@
 The supplied model is a single five-neuron linear classifier over 64 raw,
 unsigned millimetre distances in sensor row order. Each score is a signed
 32-bit dot product of distance and signed 16-bit weight, plus signed 32-bit
-bias. Argmax chooses the lowest index on ties. The trained files are
+bias. Raw argmax chooses the lowest index on ties; the confidence gate rejects
+tied or insufficiently separated results. The trained files are
 `weights.mem` (320 neuron-major entries) and `biases.mem` (five entries).
 No rescaling, mirroring, normalization or replacement of invalid sensor values
 has been added to the supplied inference calculation.
@@ -28,7 +29,8 @@ for the production `Drone` top. The battery/lights flight test explicitly enable
 inference and feeds the coherent 64-pixel stream captured by `DepthFrameStream`.
 The NPU stores a private snapshot before starting the supplied `layer` datapath.
 Partial or out-of-order images do not start inference. The latest complete
-prediction is held between frames; loss of lidar health clears availability
+qualified prediction is held between frames; a rejected new frame clears it.
+Loss of lidar health clears availability
 and aborts pending inference. A new complete frame is required after recovery.
 
 SW9 shows the prediction instead of center distance. The existing configuration,
@@ -37,6 +39,41 @@ only when ENABLE_POSITION_DIAGNOSTICS=1; the current hover image disables that
 diagnostic estimator to fit FPGA resources. With no valid
 prediction, SW9 shows dashes. LD9 continues to indicate lidar scan freshness,
 not a classification confidence score. The 64-pixel USB packet is unchanged.
+
+## Confidence selection - November 23, 2026
+
+Each complete image qualifies its winning class only when all of these hold:
+
+- Its raw score is at least 4096 (`MIN_SCORE`).
+- Its score exceeds the runner-up by at least 4096 (`MIN_MARGIN`).
+- That lead is at least 25% of the winning score's magnitude
+  (`RELATIVE_MARGIN_SHIFT=2`, with the fractional threshold rounded upward).
+- The winner is unique. Ties are rejected, including ties involving Continue.
+
+For example, winner 20000 / runner-up 15000 passes; 20000 / 19000 fails.
+These are initial heuristic thresholds in the exported integer-score scale,
+not a calibrated probability or a percentage of frame votes. The board exposes
+`NPU_MIN_SCORE`, `NPU_MIN_MARGIN`, and `NPU_RELATIVE_MARGIN_SHIFT` for tuning
+against a labeled validation set. The policy is identical for all five labels.
+
+`argmax.prediction` remains the raw class for arithmetic/reference inspection;
+`confident` and `layer.prediction_confident` report threshold qualification.
+The NPU integration and standalone top output unknown class 7 for a rejected
+frame and suppress the valid-action pulse. A new rejected frame clears the
+previous accepted result rather than retaining an old command. SW9 shows
+`----` while no qualified prediction exists. LD9 can remain solid because
+lidar health and classification confidence are separate. NPU motor overrides
+remain disconnected.
+
+The current model hashes still match the previously programmed model:
+
+- weights: `12993B073B715F9C778E1D17CBF042F345C378F4389CD9AADF49DF25790FD94A`
+- biases: `F46283EE58B046B578511AD92073A90E5E4C31F3EF2064E7659A4971043EF35F`
+
+The new-model upload is waiting for the updated files' location. Neither file
+has been replaced. Regenerate reference vectors/constants after replacing them:
+`python tests/NPU/generate_vectors.py`. Goldens include independently calculated
+raw scores, confidence decisions and model-specific layer/board stimuli.
 
 SystemVerilog support is required for the supplied array ports. `NPU.v` includes
 the guarded helper files; add its directory to include paths. Vivado must treat

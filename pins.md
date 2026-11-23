@@ -115,3 +115,9 @@ Later November 23 pitch diagnostic modifier: SW8 + SW4 = measured pitch angle
 (deg/s). Positive = nose-up for all three. Select only one of SW4/SW5/SW6.
 SW8 OFF retains yaw views; SW8 alone remains roll and SW12 alone RC pitch.
 No pins, motor behavior, yaw tuning or lighting assignments change.
+
+November 23 NPU confidence update (upload pending model-file location): SW9
+shows a command only when score >=4096, runner-up lead >=4096 and lead >=25%
+of winner magnitude. Otherwise dashes; Continue receives no special fallback.
+LD9 remains lidar health and can be solid while the prediction is uncertain.
+AI/motor overrides remain disconnected; no control or pin assignment changes.

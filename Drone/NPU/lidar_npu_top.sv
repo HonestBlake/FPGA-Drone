@@ -28,7 +28,7 @@ module lidar_npu_top (
     wire done_array [0:4];
 
     wire [2:0] layer_prediction;
-    wire layer_valid;
+    wire layer_valid, layer_confident;
 
     // Controller
     localparam WAIT_FRAME = 2'd0;
@@ -80,7 +80,7 @@ module lidar_npu_top (
         .done_array(done_array),
 
         .prediction(layer_prediction),
-        .prediction_valid(layer_valid)
+        .prediction_valid(layer_valid), .prediction_confident(layer_confident)
     );
 
     // ====================================
@@ -90,7 +90,7 @@ module lidar_npu_top (
     always @(posedge clk) begin
         if (rst) begin
             state <= WAIT_FRAME;
-            prediction <= 0;
+            prediction <= 3'd7;
             prediction_valid <= 0;
         end
         else begin
@@ -107,8 +107,8 @@ module lidar_npu_top (
                 RUN_NPU: begin
                     // Wait for all five neurons
                     if (layer_valid) begin
-                        prediction <= layer_prediction;
-                        prediction_valid <= 1;
+                        prediction <= layer_confident ? layer_prediction : 3'd7;
+                        prediction_valid <= layer_confident;
                         state <= RESET_NPU;
                     end
                 end

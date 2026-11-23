@@ -40,7 +40,10 @@ module BatteryLightsFlightTest #(
     parameter integer IMU_MOUNT_FRD = 0, // Measured level raw Z is approximately +16384.
     // Bench tuning: +/-30deg heading error contributes up to +/-187 counts.
     // Shared controller default remains 8; rate damping stays at YAW_KP=8.
-    parameter integer YAW_HEADING_KP = 16
+    parameter integer YAW_HEADING_KP = 16,
+    parameter integer NPU_MIN_SCORE = 4096,
+    parameter integer NPU_MIN_MARGIN = 4096,
+    parameter integer NPU_RELATIVE_MARGIN_SHIFT = 2
 ) (
     input wire clk, btnC, tx,
     input wire lidar_rx, ultrasonic_echo,
@@ -193,7 +196,8 @@ module BatteryLightsFlightTest #(
     wire [15:0] npu_pixel_mm;
     wire [2:0] npu_action;
     wire [2:0] npu_command = npu_action<=4 ? NPU_CLASS_ACTIONS[npu_action*3 +: 3] : 3'd7;
-    NPU #(.ENABLE(1)) npu (
+    NPU #(.ENABLE(1),.MIN_SCORE(NPU_MIN_SCORE),.MIN_MARGIN(NPU_MIN_MARGIN),
+          .RELATIVE_MARGIN_SHIFT(NPU_RELATIVE_MARGIN_SHIFT)) npu (
         .clk(logic_clk), .rst(rst), .healthy(lidar_healthy),
         .pixel_valid(npu_pixel_valid), .pixel_address(npu_pixel_address), .pixel_mm(npu_pixel_mm),
         .available(npu_available), .action_valid(npu_action_valid), .action(npu_action));
