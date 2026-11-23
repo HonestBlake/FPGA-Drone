@@ -263,6 +263,7 @@ module Drone #(
     );
 
     NPU npu (
+        .healthy(1'b0), .pixel_valid(1'b0), .pixel_address(6'd0), .pixel_mm(16'd0),
         .clk(clk), .rst(rst), .available(internal_npu_available),
         .action_valid(internal_npu_action_valid), .action(internal_npu_action)
     );

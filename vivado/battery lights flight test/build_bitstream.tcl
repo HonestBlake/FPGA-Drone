@@ -8,6 +8,8 @@ if {[file exists $project_file]} {
             add_files -norecurse [list $source_file]
         }
     }
+    set_property include_dirs [list [file join $shared_dir NPU]] [get_filesets sources_1]
+    set_property file_type SystemVerilog [get_files NPU.v]
     update_compile_order -fileset sources_1
     reset_run synth_1
 } else {

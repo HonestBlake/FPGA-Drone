@@ -1,3 +1,6 @@
+`timescale 1ns / 1ps
+`ifndef DRONE_NPU_NEURON_V
+`define DRONE_NPU_NEURON_V
 `include "mac.v"
 
 module neuron#(parameter N_INPUTS = 5)(clk, rst, counter, x, w, bias, result, done);
@@ -30,3 +33,4 @@ always @(posedge clk) begin
 
 end
 endmodule
+`endif

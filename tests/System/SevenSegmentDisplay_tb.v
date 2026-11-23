@@ -17,6 +17,28 @@ module SevenSegmentDisplay_tb;
         .clk(clk), .rst(rst), .write(write), .value(value),
         .digit_enable(digit_enable), .decimal_points(decimal_points), .seg(seg), .dp(dp), .an(an)
     );
+    wire [6:0] word_seg;
+    wire [3:0] word_an;
+    SevenSegmentDisplay #(.CLK_FREQ(10_000_000),.REFRESH_HZ(250_000),.BLANK_CYCLES(3),.STATUS_WORDS(1),.RC_AXIS_WORDS(1)) words (
+        .clk(clk),.rst(rst),.write(write),.value(value),.digit_enable(digit_enable),
+        .decimal_points(decimal_points),.seg(word_seg),.dp(),.an(word_an));
+    task check_word;
+        input [15:0] token;
+        input [27:0] expected;
+        integer t, d, seen;
+        begin
+            put(token,4'hf,0);repeat(80) @(negedge clk);seen=0;
+            for(t=0;t<80;t=t+1) begin
+                case(word_an) 4'he:d=0;4'hd:d=1;4'hb:d=2;4'h7:d=3;default:d=-1;endcase
+                if(d>=0)begin
+                    if(word_seg!==expected[d*7 +: 7])$fatal(1,"Status token %h digit %0d",token,d);
+                    seen=seen|(1<<d);
+                end
+                @(negedge clk);
+            end
+            if(seen!=15)$fatal(1,"Status sweep incomplete");
+        end
+    endtask
     always @(posedge clk) begin
         #1;
         if (!rst) begin
@@ -96,6 +118,21 @@ module SevenSegmentDisplay_tb;
         if (seg !== patterns[1]) $fatal(1, "Display write tore digit 3");
         check_sweep(16'h2222, 4'hf, 4'hf);
 
+        check_word(16'hc000,{7'h7f,7'h40,7'h40,7'h40}); // zero received command
+        check_word(16'hc025,{7'h7f,7'h40,7'h24,7'h12}); // +25, blank positive sign
+        check_word(16'hd025,{7'h3f,7'h40,7'h24,7'h12}); // -25
+        check_word(16'hc500,{7'h7f,7'h12,7'h40,7'h40});
+        check_word(16'hd500,{7'h3f,7'h12,7'h40,7'h40});
+        check_word(16'hc999,{7'h7f,7'h10,7'h10,7'h10});
+        check_word(16'hd999,{7'h3f,7'h10,7'h10,7'h10});
+        check_word(16'hb100,{7'h46,7'h23,7'h2b,7'h07}); // Cont
+        check_word(16'hb101,{7'h12,7'h07,7'h23,7'h0c}); // StoP
+        check_word(16'hb102,{7'h7f,7'h7f,7'h63,7'h0c}); //   uP
+        check_word(16'hb103,{7'h47,7'h06,7'h0e,7'h07}); // LEFt
+        check_word(16'hb104,{7'h2f,7'h79,7'h42,7'h07}); // rIGt
+        check_word(16'hc0f6,{7'h46,7'h2b,7'h0e,7'h42});
+        check_word(16'ha17d,{7'h08,7'h2f,7'h2b,7'h21});
+        check_word(16'hadbf,{7'h7f,7'h2f,7'h21,7'h11});
         put(16'hffff, 0, 4'hf);
         repeat (40) @(negedge clk); check_sweep(16'hffff, 0, 4'hf);
         @(negedge clk); rst = 1;
@@ -105,5 +142,5 @@ module SevenSegmentDisplay_tb;
         $display("PASS: SevenSegmentDisplay hex, order, enable, DP, latching, coherent sweeps, blanking, reset");
         $finish;
     end
-    initial begin #200000; $fatal(1, "Display watchdog"); end
+    initial begin #500000; $fatal(1, "Display watchdog"); end
 endmodule

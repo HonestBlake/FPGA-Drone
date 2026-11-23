@@ -44,7 +44,22 @@ module LidarBench_tb;
   join
   if(dut.lidar_center_mm!=1232 || !dut.lidar_center_valid) $fatal(1,"Top centre average");
   force dut.configuring=0; #1;
-  if(dut.display_value!==16'h1232) $fatal(1,"SW9 lidar mm display");
+  if(!dut.npu_available || dut.npu_action!==4 || dut.display_value!==16'hb101)
+   $fatal(1,"SW9 real-weight NPU Stop for ramp frame");
+  force dut.ai_override_request=1;
+  for(n=0;n<5;n=n+1) begin
+   force dut.npu_action=n; #1;
+   case(n)
+    0: if(dut.display_value!==16'hb100)$fatal(1,"Continue mapping");
+    1: if(dut.display_value!==16'hb103)$fatal(1,"Left mapping");
+    2: if(dut.display_value!==16'hb104)$fatal(1,"Right mapping");
+    3: if(dut.display_value!==16'hb102)$fatal(1,"Up mapping");
+    4: if(dut.display_value!==16'hb101)$fatal(1,"Stop mapping");
+   endcase
+   if(dut.controller.npu_available!==0 || dut.controller.avoidance_enable!==0)
+    $fatal(1,"NPU connected to motor override");
+  end
+  release dut.npu_action;release dut.ai_override_request;
   release dut.configuring;
   if(!dut.lidar_healthy || led[9]!==1 || dut.lidar_frame_count!=1)
    $fatal(1,"Complete frame did not make lidar healthy");
@@ -54,10 +69,13 @@ module LidarBench_tb;
   sum=0;for(n=0;n<134;n=n+1) sum=(sum+packet[n])&65535;
   if({packet[135],packet[134]}!==sum[15:0]) $fatal(1,"Top USB checksum");
   wait(!dut.lidar_healthy);
+  force dut.configuring=0;#1;
+  if(dut.npu_available || dut.display_value!==16'hffff)$fatal(1,"Stale NPU result displayed");
+  release dut.configuring;
   force dut.heartbeat=0; #1;if(led[9]!==0) $fatal(1,"Stale lidar blink off");
   force dut.heartbeat=1; #1;if(led[9]!==1) $fatal(1,"Stale lidar blink on");
   release dut.heartbeat;
-  $display("PASS: sensor UART -> complete 8x8 buffer -> coherent USB packet, lidar health/freshness, isolated flight control");
+  $display("PASS: sensor UART -> complete 8x8 buffer -> coherent USB packet, lidar/NPU health/freshness, five labels and isolated flight control");
   $finish;
  end
 endmodule

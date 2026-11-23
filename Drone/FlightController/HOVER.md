@@ -1,75 +1,80 @@
-# Experimental ultrasonic height hold
+# Ultrasonic height hold with throttle pickup
 
-`HoverController.v` is a helper in the flight-computer subsystem. It is
-**not instantiated by `FlightController`, `Drone`, or any uploaded test**.
-The current board image and its SW15 arming remain unchanged. No existing
-switch silently activates this controller.
+The battery/lights flight test enables `HoverController` using transmitter
+SwD / CH10 (ON >=1750). This controller supplies collective throttle to the
+existing attitude controller, before mixing and DShot. It cannot arm motors or
+control horizontal position. The production `Drone` top does not enable this
+bench feature automatically. NPU predictions remain display-only. The current hover image sets
+`ENABLE_POSITION_DIAGNOSTICS=0` because the combined image exceeded FPGA logic
+capacity. SW11/SW12 X/Y views are inactive; the estimator source remains available
+for a separate build. This estimator never supplied motor-control feedback.
 
-The module produces a collective **RC throttle command in 0..1000 units**,
-before attitude mixing and DShot conversion. It does not drive an ESC, arm
-motors, or maintain horizontal position. The existing IMU controller must still
-stabilize attitude. Height refers to distance above the reflecting surface, not
-altitude above sea level.
+## Height and entry
 
-## Interface and engagement
+The sensor and SW10 report millimetres. A ground reading of 120 means 120mm
+from the sensor face to the reflecting surface, including the sensor mounting
+height above the feet. No zero adjustment is needed to capture and maintain
+that same measured distance. A change of 610mm corresponds to about two feet.
 
-All inputs must be synchronous to `clk`; reset is synchronous active high.
-Connect the paired Ultrasonic driver's `distance_mm`, `sample_valid`, and `valid`
-to the corresponding distance/sample/range inputs. Supply actual armed status,
-control/radio validity, and an `attitude_ok` decision from a verified IMU/tilt
-policy. Do not tie health inputs high in a flying integration.
+After boot, the mode switch must be observed OFF, then ON. Entry requires SW15
+armed, all four motor channels selected, valid RC/IMU/control, attitude within
++/-15 degrees roll/pitch, a fresh ultrasonic reading within 80..2000mm, and
+manual throttle >=100/1000. The target is the latest accepted height, and the
+base throttle is the current pilot command. The first held command is identical
+to the manual command, avoiding a step on entry. This is height capture, not
+an automatic takeoff mode. Enable it after reaching the desired height.
 
-Until a mode control is deliberately assigned, leave `enable=0`. There must be
-an observed OFF state after reset, followed by a rising enable edge with healthy
-inputs, fresh distance inside 80..2000mm, and manual throttle >=100. The module
-captures that height as its fixed target and the current throttle as its base;
-initial output equals manual throttle, avoiding a step on entry. Raising or
-lowering the non-idle stick does not change the target/base while holding.
-Disable to regain manual control and re-enable to capture a new target.
+## Hold and manual return
 
-Only use `throttle_out` as a future FlightController collective input when the
-integration's hover policy permits it. `active` is the explicit indication that
-height hold is controlling it; otherwise `throttle_out` passes manual throttle
-through, clamped to 0..1000. Reset produces zero. Keep FlightController's own
-arming, radio/IMU health checks, and throttle-stop gates intact.
+During hold, the throttle stick may be moved to zero without cancelling the
+height loop. Turning SwD OFF enters **pickup**: height regulation continues
+until the manual throttle equals or exceeds the current held collective. This
+comparison follows the live controller command, not just its initial base.
+There is no automatic timeout that drops a zero-position stick into control.
 
-## Control law and limits
+After pickup, collective interpolates from its current value to the live stick
+over 500ms (configurable). Dropping the stick during that interval also ramps
+the output, rather than causing an immediate cut. Once the blend completes,
+normal manual throttle and the existing below-10 cutoff apply. Turning SwD ON
+again during pickup or blending captures a new current height/base when range
+and attitude are usable, including when the stick is at zero.
 
-Each new distance updates a bounded proportional/vertical-rate damping command:
+SW15 OFF remains immediate disarm, independent of hold, pickup, or blending.
+RC/IMU/control loss still uses the existing flight-controller motor-stop and
+explicit rearming policy. Radio health here means serial packet freshness; a
+receiver RF failsafe may keep sending valid packets and must be checked separately.
+Neither case retains an autonomous command for a
+later rearm; a fresh SwD OFF/ON sequence is required to enter height hold again.
 
-```text
-error_mm = target_height_mm - distance_mm
-vertical_speed_mmps = (distance_mm - previous_mm) * 1000 / SAMPLE_PERIOD_MS
-correction = (KP * error_mm - KD * vertical_speed_mmps) / 256
-output = captured_manual_throttle + bounded_correction
-```
+## Sensor failure and indicators
 
-Defaults: sample period 65ms, KP=16, KD=64, correction +/-150 throttle counts.
-Output is clamped to 10..1000 while active. These gains are **provisional and not
-flight tuned**. The fixed-period derivative must match the Ultrasonic driver's
-65ms start-to-start schedule. Do not feed irregularly timed measurements or
-change the sensor interval without changing the controller's parameter.
-No integral term, hover-thrust learning, altitude setpoint adjustment, tilt
-correction, or dynamic sensor fusion is implemented.
+During hold or pending pickup, a missing, invalid or stale range (150ms), a sample
+jump over 300mm, or attitude
+outside the height-loop envelope stops height corrections and freezes the last
+collective. It does **not** fall straight back to a low/zero throttle stick.
+This frozen command is not altitude regulation or an automatic landing. Pilot
+pickup remains available with SwD OFF; after correcting sensing, an OFF/ON
+cycle can capture a fresh target. Invalid sensor data alone does not disarm.
 
-A measurement step exceeding 300mm, an out-of-window reading, missing/invalid
-range, stale data (150ms), loss of arm/control/attitude permission, or pilot
-throttle below 10 disengages holding. Validity/health/idle gates also suppress
-`active` immediately between updates. After a rejection/dropout, a valid sample
-alone cannot resume holding: switch enable OFF, then ON when healthy.
-`fault` reports the rejected entry or dropout and clears when enable is OFF.
+LD12 is solid during healthy height hold, blinking during pickup, blending, or
+a rejected/degraded hold request, and off in manual mode. LD10 still indicates
+ultrasonic health. SW14 shows E031 for hover rejection/degraded control; existing
+higher-priority faults, including ultrasonic E030, take precedence. SW10 remains
+the distance view and SW9 remains the NPU prediction view.
 
-**Loss of height sensing falls back to manual throttle, not an automatic
-landing or motor stop.** Integrating this behavior into an aircraft requires an
-explicit, tested mode/failsafe policy. Ultrasonic reflections can be wrong even
-within range; passing these guards does not prove height is correct. Begin with
-a stationary range-display test, then verify sensing under motor noise before
-ever enabling throttle corrections. A constrained Vivado build and physical
-sign/gain tests remain required before flight.
+## Control law and validation
 
-## Verification
+The captured-base controller uses KP=16 and KD=64, divided by 256. Vertical rate
+uses the paired driver's nominal 65ms sample interval, with a quarter-weight
+update low-pass filter. Corrections are limited to +/-150 throttle counts and
+active output to 10..1000. Gains are initial bench values, not flight tuned.
+There is no integral trim, tilt compensation, position hold or terrain tracking.
 
-Run `./Run-Tests.ps1 -Module HoverController` from the root. The bench covers
-boot-time enable inhibition, target/base capture, correction signs and limits,
-throttle clamps, spike/out-of-range rejection, stale/invalid ranges, disarm,
-control/tilt loss, idle override, required enable cycle, and reset.
+The unit bench verifies captured target/base, correction signs, filtered rate,
+zero-stick hold, live-command pickup, signed upward/downward blend, recapture,
+range/spike/stale/tilt freeze, and health/disarm/reset. `HoverBench_tb` drives
+physical ultrasonic echo pulses and checksummed CH10 iBUS packets, models the
+SPI IMU and decodes all four ESC wires. It verifies that the effective collective
+bypasses the manual-idle cutoff only during active hover/handover, while SW15 and
+radio failure still stop motors. These are digital tests; actual gains and
+sensor behavior under propeller vibration still require physical validation.

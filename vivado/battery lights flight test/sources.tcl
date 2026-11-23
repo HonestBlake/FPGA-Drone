@@ -3,6 +3,9 @@ set shared_dir [file normalize [file join $test_dir .. .. Drone]]
 set design_sources [list [file join $test_dir src BatteryLightsFlightTest.v]]
 lappend design_sources [file join $test_dir src DepthFrameStream.v]
 foreach rel {
+    NPU/NPU.v
+    NPU/weights.mem
+    NPU/biases.mem
     UartTransmitter.v
     System/UartOutput.v
     PeripheralInterface/LidarArray/LidarArray.v
@@ -16,9 +19,12 @@ foreach rel {
     PeripheralInterface/IMU/ImuEstimator.v
     PeripheralInterface/MotorControl/MotorControl.v
     PeripheralInterface/MotorControl/MotorDriver.v
+    FlightController/HoverController.v
     FlightController/FlightController.v
     FlightController/PositionEstimator.v
     System/TickGenerator.v
     System/BatteryMonitor.v
     System/SevenSegmentDisplay.v
 } { lappend design_sources [file join $shared_dir $rel] }
+
+# NPU includes SystemVerilog array ports; memory files are synthesis sources.

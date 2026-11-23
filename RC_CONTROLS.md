@@ -64,3 +64,58 @@ https://static1.squarespace.com/static/645c2a3f23047437485c5189/t/66721c6a3a5adf
 Verify physical switch direction/endpoints, especially all three SwC positions,
 before relying on the controls. The decoder tests use representative values
 1000/1500/2000; actual installed transmitter values are not yet observed.
+
+
+## Active ultrasonic hover update ? November 20, 2026
+
+SwD / CH10 now captures current ultrasonic height when armed, all four motor
+channels selected, throttle >=100/1000, and sensing/attitude are healthy. OFF
+keeps height hold until the throttle stick catches the current collective, then
+blends to manual over 500ms. Low stick alone does not cancel active height hold.
+SW15 remains immediate disarm. Sensor failure freezes collective and flags a
+fault while allowing manual pickup; RC/IMU failure retains the existing stop
+policy. LD12 is solid for healthy hold, blinking for pickup/blend/degraded or
+rejected request, and off in manual. SW10 reads sensor distance in millimetres.
+See [height hold](Drone/FlightController/HOVER.md) for limits and recovery.
+Earlier request-only descriptions of SwD/LD12 are superseded by this section.
+
+
+## Received axis monitoring - November 22, 2026
+
+Onboard SW7 selects yaw / CH4, SW11 roll / CH1, and SW12 pitch / CH2 in the
+current hover test. Display is signed -500..+500, neutral zero, calculated as
+clamp(channel,1000,2000)-1500 before flight-controller deadbands or scaling.
+Positive values have a blank sign; negative values show a minus. Radio timeout
+shows dashes. Select one view at a time; error/configuration retain priority.
+Record centered readings and sustained correction inputs separately. No new
+trim, mixer, motor, hover or NPU override behavior is introduced by these views.
+
+## Yaw feedback monitoring - November 23, 2026
+
+Onboard SW4 now shows measured yaw rate in degrees/second (tenths through
+99.9, then whole degrees/second with no decimal point). SW5 shows requested
+yaw correction in signed motor-command counts before individual motor
+clipping; SW6 shows relative heading error in degrees to 0.1, limited to
++/-30.0. Positive means clockwise body rotation/correction, viewed from above.
+SW7 remains raw received yaw input. No gains or trim offsets are changed.
+
+SW4 works disarmed with a healthy IMU. With props removed and SW15 OFF, check
+stillness near zero and the signs during gentle clockwise/counterclockwise
+hand rotation. SW5/SW6 require a healthy controller command path, and remain
+zero while disarmed or at throttle cutoff. A deliberate yaw-stick command
+outside +/-20 resets the heading error. Unavailable data shows dashes.
+Configuration and SW14 override these views; then priority is SW4, SW5, SW6,
+followed by the earlier views. Select only one at a time.
+
+Later November 23 gain trial: the bench heading gain increases from 8 to 16.
+At zero yaw rate and the same +/-30deg heading bound, SW5 can show +/-187
+heading correction counts (previously +/-93). Rate gain and pilot scaling are
+unchanged. The combined correction limit remains +/-400. Physical behavior
+still requires testing; this does not add a constant radio or motor trim.
+
+Later November 23 pitch diagnostics: hold onboard SW8 ON and select SW4 for
+measured pitch angle (degrees to 0.1), SW5 for requested pitch correction
+(signed motor-command counts), or SW6 for pitch rate (deg/s). Positive angle,
+rate and correction mean nose-up. With SW8 OFF, the existing yaw views remain.
+SW8 alone stays IMU roll; SW12 alone stays raw RC pitch. Angle/rate can be read
+disarmed, correction reads zero while stopped. No control gain/trim change.

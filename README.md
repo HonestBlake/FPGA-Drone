@@ -3,14 +3,31 @@
 Latest rewired bench test: [`vivado/battery lights flight test/`](vivado/battery%20lights%20flight%20test/README.md).
 It uses radio JC1, ESC channels JB1-JB4, external lights JB7-JB9, battery
 sense JXADC1/JXADC7, SW15 arm, and CH8/SwB prop lights and CH9/SwC head/landing lights. Normal display
-shows `CnFG` during IMU setup, then defaults to `rdy` disarmed or `Arnd` armed; SW7 selects throttle, SW8 signed roll, SW13 battery and SW14
+shows `CnFG` during IMU setup, then defaults to `rdy` disarmed or `Arnd` armed; SW7 selects RC yaw, SW11 RC roll, SW12 RC pitch, SW8 signed IMU roll, SW13 battery and SW14
 error codes (E000 if clear). LD13 is battery status and LD14 error/view status.
-CH7/SwA and CH10/SwD requests show on LD11/LD12; AI and hover are inactive.
+CH7/SwA requests show on LD11; NPU output is display-only. CH10/SwD enables
+ultrasonic height capture, with OFF-to-manual throttle pickup and a 500ms blend.
+LD12 is solid during healthy hold, blinking during pickup/blend/fault, off manual.
 Motor channels 0/1/2/3 are back-left/front-left/back-right/front-right.
 Lidar C/R on JC7 and D/T on JC8 feeds an 8x8 USB depth viewer; LD9 is lidar
 health; LD10 is ultrasonic range status (JC3 trigger/JC4 divided echo).
-SW10 shows ultrasonic mm, SW9 lidar centre-four mm; hover control stays inactive; there is no ESC return status.
+SW10 shows ultrasonic mm and SW9 the NPU command (Cont/LEFt/rIGt/uP/StoP).
+Hover entry requires all four motors selected, actual arming, healthy inputs,
+fresh range and throttle >=100/1000. SW15 still immediately disarms. See
+[height-hold behavior and failure policy](Drone/FlightController/HOVER.md).
+SW11/SW12 now monitor signed RC roll/pitch commands in the hover image;
+the X/Y estimator remains excluded and its source is retained. RC axis views
+show -500..+500 with neutral zero; they do not apply trim offsets. There is no ESC return status.
 Rotor directions and stabilization signs still require bench checks.
+SW4 now shows measured yaw speed, SW5 signed yaw correction counts, and SW6
+relative heading error. These diagnostic selectors do not affect motor commands.
+The current gain trial doubles only the bench heading gain (8 to 16). Reported
+yaw hold improved; horizontal motion after stick release is under diagnosis.
+Neutral roll/pitch requests level attitude, with no horizontal velocity braking.
+See the latest bench guide.
+With SW8 ON, SW4/SW5/SW6 instead display measured pitch angle, requested pitch
+correction and pitch rate. These views support frame-level and feedback checks;
+SW8 alone remains roll and SW12 remains received pitch-stick input.
 The earlier test described below retains its original pin assignments.
 
 [`vivado/imu flight test/`](vivado/imu%20flight%20test/README.md) integrates radio on JB1,

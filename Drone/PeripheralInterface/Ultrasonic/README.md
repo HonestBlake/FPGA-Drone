@@ -1,9 +1,11 @@
 # HC-SR04 ultrasonic range interface
 
 `Ultrasonic.v` is a standalone, synthesizable pulse-width interface for the
-HC-SR04. It lives alongside the other peripheral drivers but is intentionally
-**not instantiated by `PeripheralInterface`, `Drone`, or the uploaded board test**.
-No trigger output or hover mode is enabled by adding these source files.
+HC-SR04. The current board test instantiates it with trigger on JC3 and divided
+echo on JC4. SW10 shows millimetres, LD10 indicates sensor health, and valid
+samples feed the [height controller](../../FlightController/HOVER.md).
+The production `PeripheralInterface` / `Drone` top does not automatically enable
+this bench integration.
 
 All logic runs in `clk`; `rst` is synchronous active high. `enable=0` clears
 measurement state, drives trigger low, and makes `valid=0`. Echo has a two-stage

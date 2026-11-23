@@ -1,5 +1,8 @@
+`timescale 1ns / 1ps
+`ifndef DRONE_NPU_BIAS_LUT_SV
+`define DRONE_NPU_BIAS_LUT_SV
 
-module bias_lut (
+module bias_lut #(parameter BIASES_FILE = "biases.mem") (
     input  wire [2:0] neuron_addr,
     output wire signed [31:0] bias
 );
@@ -8,7 +11,7 @@ module bias_lut (
     reg signed [31:0] bias_mem [0:4];
 
     initial begin
-        $readmemh("biases.mem", bias_mem);
+        $readmemh(BIASES_FILE, bias_mem);
     end
 
     // Select the bias for the requested neuron
@@ -17,3 +20,5 @@ module bias_lut (
                 : 32'sd0;
 
 endmodule
+
+`endif

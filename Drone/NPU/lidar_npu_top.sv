@@ -1,5 +1,8 @@
+`timescale 1ns / 1ps
+`ifndef DRONE_NPU_LIDAR_NPU_TOP_SV
+`define DRONE_NPU_LIDAR_NPU_TOP_SV
 `include "layer.sv"
-`include "LidarArray.v"
+`include "../PeripheralInterface/LidarArray/LidarArray.v"
 module lidar_npu_top (
     input wire clk,
     input wire rst,
@@ -124,3 +127,5 @@ module lidar_npu_top (
     end
 
 endmodule
+
+`endif

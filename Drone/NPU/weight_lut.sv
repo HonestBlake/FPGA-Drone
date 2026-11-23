@@ -1,7 +1,11 @@
+`timescale 1ns / 1ps
+`ifndef DRONE_NPU_WEIGHT_LUT_SV
+`define DRONE_NPU_WEIGHT_LUT_SV
 
 module weight_lut #(
     parameter N_INPUTS = 64,
-    parameter N_NEURON = 5
+    parameter N_NEURON = 5,
+    parameter WEIGHTS_FILE = "weights.mem"
 )(
     input [7:0] address,
     input [7:0] n_number,
@@ -11,7 +15,7 @@ module weight_lut #(
 logic signed [15:0] weights [0:N_INPUTS*N_NEURON-1];
 
 initial begin
-    $readmemh("weights.mem", weights);
+    $readmemh(WEIGHTS_FILE, weights);
 end
 
 always_comb begin
@@ -22,3 +26,5 @@ always_comb begin
 end
 
 endmodule
+
+`endif

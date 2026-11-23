@@ -1,3 +1,6 @@
+`timescale 1ns / 1ps
+`ifndef DRONE_NPU_LAYER_SV
+`define DRONE_NPU_LAYER_SV
 
 `include "neuron.v"
 `include "weight_lut.sv"
@@ -6,7 +9,8 @@
 
 module layer #(
     parameter N_NEURON = 5,
-    parameter N_INPUTS = 64
+    parameter N_INPUTS = 64,
+    parameter WEIGHTS_FILE = "weights.mem", BIASES_FILE = "biases.mem"
 )(
     input wire clk,
     input wire rst,
@@ -45,14 +49,14 @@ module layer #(
 
             weight_lut #(
                 .N_INPUTS(N_INPUTS),
-                .N_NEURON(N_NEURON)
+                .N_NEURON(N_NEURON), .WEIGHTS_FILE(WEIGHTS_FILE)
             ) weight (
                 .address(counter),
                 .n_number(neuron_number),
                 .weight(w[i])
             );
 
-            bias_lut biases (
+            bias_lut #(.BIASES_FILE(BIASES_FILE)) biases (
                 .neuron_addr(neuron_number[2:0]),
                 .bias(b[i])
             );
@@ -96,3 +100,5 @@ module layer #(
     };
 
 endmodule
+
+`endif

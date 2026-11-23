@@ -1,5 +1,312 @@
 # Battery, lights, and flight-control bench test
 
+## Pitch diagnostics - November 23, 2026
+
+Yaw flight feedback after the gain trial: the airframe may move about 10deg
+off heading during takeoff, then holds heading; forward lean/drift remains.
+No new trim or flight gain is applied by this diagnostic update.
+
+Subsequent operator measurement: frame-level pitch displays -00.1deg; raising
+the nose makes the angle positive and lowering it negative. This does not
+indicate a large static pitch-reference offset. Startup gyro-bias calibration
+does not save the startup inclination as level. Subsequent pitch-rate check:
+near zero while stationary/held tilted, positive nose-up motion, negative
+nose-down motion. At about +10deg nose-up, correction was about -128 counts,
+consistent with the current proportional gain (about -125 at exactly +10deg
+and zero pitch rate).
+
+Latest flight observation: a persistent forward lean was not apparent in that
+flight. Motion continues forward/back/left/right after a commanded lean and
+stick release. Neutral roll/pitch commands request zero attitude; the current
+image does not command horizontal braking or feed horizontal velocity/position
+into motor control. Ultrasonic hover controls vertical collective only. Check
+whether measured pitch promptly returns to near zero during the remaining
+motion before changing attitude gains. Faster leveling alone does not cancel
+existing horizontal velocity. No gain, trim or motor change follows from this
+observation alone.
+
+SW8 acts as a pitch-axis modifier when SW4/SW5/SW6 diagnostics are selected.
+With SW8 OFF, their existing yaw readings remain available. SW8 alone still
+shows roll, and SW12 alone still shows the received pitch stick.
+
+| Switches ON | Reading | Positive sign |
+| --- | --- | --- |
+| SW8 + SW4 | Measured pitch angle, degrees to 0.1 | Nose up |
+| SW8 + SW5 | Requested pitch correction, motor-command counts before clipping | Requests nose-up torque |
+| SW8 + SW6 | Measured pitch rate, deg/s; tenths through 99.9 then whole units | Nose rotating up |
+
+Use only one of SW4/SW5/SW6 at a time. Configuration and SW14 error retain
+priority. SW4 wins over SW5, which wins over SW6. Negative values show a minus.
+Angle/rate work disarmed without radio or motor selection; correction requires
+the normal healthy controller path and reads zero while disarmed or stopped.
+Unavailable/stale data shows dashes. Display mode does not change motor control.
+
+First measurement: remove propellers, leave SW15 OFF, and level the actual
+frame front-to-back (do not assume the landing feet or IMU PCB are level with
+it). After stationary calibration, select SW8 + SW4 and record the exact signed
+reading, including decimal point. Gently raise the nose: angle should increase
+positive; lower it: negative. SW8 + SW6 should show matching rate signs, and
+near zero when held still.
+
+Second measurement, still propellers removed: select all motors, keep radio
+hover OFF and yaw/pitch sticks centered, arm at idle, then raise throttle above
+cutoff. With the nose held slightly down, SW8 + SW4 should be negative and
+SW8 + SW5 positive. Nose up should give positive angle and negative correction
+after motion stops. Record the frame-level angle plus a held angle/correction
+pair, then disarm. Switch only the display selector during each held angle.
+
+Startup averages gyro bias and initializes attitude from gravity; it does not
+learn a frame-level pitch offset. The previously reported +5 pitch-stick value
+is inside the existing +/-20 deadband, so it requests level pitch. A nonzero
+reading with a truly level frame points toward reference/mounting bias; correct
+pitch feedback with insufficient correction suggests a different control or
+balance issue. Check that the larger battery has not made the airframe nose-heavy.
+Roll/pitch remain PD control without integral correction; attitude leveling
+alone does not hold horizontal position or brake existing horizontal velocity.
+
+Pitch diagnostic validation:
+- FlightController unit tests passed for latched angle/rate, pitch correction
+  and damping signs, sample-strobe isolation, idle/disarmed telemetry and the
+  existing motor-control/interlock tests.
+- New SPI/iBUS board simulation passed: +/-1.74deg stationary reference stays
+  visible after gyro calibration, angle/rate signs and decimal formatting,
+  front/rear correction signs, the reported +5 RC input inside deadband,
+  full pilot pitch, clipping, stopped-state behavior, health loss and priorities.
+- Existing yaw diagnostic simulation passed with +/-187 heading contribution;
+  manual yaw scaling, heading reset and motor pairs are preserved.
+- Existing flight/battery/lights/IMU/arming and RC-axis display board simulations
+  passed, including the original roll view, selector priorities, motor selection,
+  pilot control, watchdogs and received pitch-stick view.
+- Pitch diagnostic build passed timing and DRC checks: 16,581 placed LUTs
+  (79.72%), 46 DSPs (51.11%), WNS +7.456ns, WHS +0.061ns, no failing endpoints.
+  No flight-control parameters changed from the preceding yaw-gain image.
+- Bitstream SHA256:
+  `0A55791486754D196147A3FD4914708DC38B7F6AFDE57018C0BA63476BA5B130`.
+- Pitch diagnostic image programmed/verified in flash and booted from QSPI,
+  DONE=1. Previous 4MB backup:
+  `build/flash_before_battery_lights_flight_test_20261123_014004.bin`.
+  Programming log: `program_pitch_diagnostics.log`. Physical frame-level and
+  pitch-sign measurements remain to be collected from the operator.
+
+## Yaw heading-gain trial - November 23, 2026
+
+Hardware observations: SW4 reads about -0.2..-0.8deg/s while stationary,
+positive during clockwise hand rotation and negative counterclockwise.
+After a clockwise turn, SW6 reached about -30 degrees and SW5 about -80
+command counts. This confirms the measured yaw and requested correction
+directions; it does not measure actual motor torque or establish flight tuning.
+
+The current bench profile sets `YAW_HEADING_KP=16` (previously 8), retaining
+the +/-30-degree heading-error bound and `YAW_KP=8` yaw-rate feedback. At zero
+measured yaw rate, the maximum heading contribution increases from 93 to 187
+signed command counts. The combined yaw correction remains limited to +/-400.
+For comparison, the earlier reported -300 yaw-stick input requests -54deg/s
+and about -168 correction counts at zero measured rate while resetting heading
+error. These approximate hover observations suggest insufficient heading
+authority, but cannot identify a weak motor or prove that this gain fixes drift.
+
+This change is confined to the bench profile. Pilot yaw scaling, roll/pitch,
+motor order, arming, hover, NPU isolation and shared controller defaults remain
+as before. It is a gain trial requiring physical validation. Persistent gyro
+bias can still cause slow heading drift; no constant yaw trim is applied.
+
+Before uploading/checking, remove propellers and keep SW15 OFF. After warmup,
+reset with the drone still and level and let calibration complete. Repeat the
+SW6 clockwise-turn test at active throttle, then inspect SW5: near -30.0deg
+and zero yaw rate, expect about -187 counts. Opposite rotation should produce
+the opposite sign. Disarm if subsequent flight checks develop yaw oscillation.
+
+Gain-trial validation:
+- SPI/iBUS board simulation passed for both heading-error directions:
+  +/-30deg produces +/-187 correction counts with the expected CW/CCW motor
+  pair commands. Manual -300 yaw still produces -168 counts at zero yaw rate;
+  deliberate turns reset heading error, and the total correction still clamps
+  at +/-400. Disarm, invalid/stale inputs and display isolation checks passed.
+- Existing ultrasonic hover board simulation passed, including capture,
+  zero-stick hold, OFF/pickup, 500ms release, sonar failure, disarm/RC stop and
+  continued NPU isolation.
+- Gain-trial build passed setup/hold timing and DRC checks. Placed utilization:
+  16,489 LUTs (79.27%), 46 DSPs (51.11%). WNS +7.528ns, WHS +0.022ns,
+  zero failing timing endpoints. The synthesis report confirms heading gain
+  16 and yaw-rate gain 8.
+- Gain-trial bitstream SHA256:
+  `9767055FA95120FC34DD24144217A0DA13C01F37F9184F7ED6C5AB5EE8A37BA9`.
+- Gain-trial flash programmed and verified; FPGA booted from QSPI (DONE=1).
+  Previous 4MB flash backup:
+  `build/flash_before_battery_lights_flight_test_20261123_011001.bin`.
+  Programming log: `program_yaw_heading_gain.log`.
+
+## Yaw diagnostics - November 23, 2026
+
+The default image adds three read-only views. Control gains, trims, mixer,
+arming and hover behavior are unchanged.
+
+| Onboard switch | Reading | Units / sign |
+| --- | --- | --- |
+| SW4 | Measured IMU yaw rate | Degrees/second; positive clockwise viewed from above, negative counterclockwise. Shows tenths through 99.9, then whole degrees/second with the decimal point off. |
+| SW5 | Requested yaw correction | Signed motor-command counts before individual motor clipping; positive requests clockwise body torque, negative counterclockwise. This is not a power percentage. |
+| SW6 | Accumulated heading error | Target minus measured yaw, in degrees to 0.1; limited to +/-30.0 by the existing controller. |
+| SW7 | Received yaw stick | Signed -500..+500 channel counts before deadband. |
+
+Configuration and SW14 error view retain priority. Then SW4 wins over SW5,
+which wins over SW6, followed by the previous views in their existing order.
+Select one view at a time. Negative readings show a minus; positive readings
+have a blank sign. For example, SW4 `-10.0` means 10 degrees/second CCW,
+SW5 `-093` requests CCW correction, and SW6 `-30.0` is the heading-error limit.
+
+First check, with propellers removed and SW15 OFF: select only SW4. After
+calibration, leave the drone still, gently rotate it clockwise viewed from
+above, then counterclockwise, and stop. Report the stationary reading and
+whether the moving readings have the expected signs. SW4 works while disarmed
+without radio traffic; stale/unhealthy IMU data shows dashes.
+
+SW5/SW6 require the normal healthy controller command path (including radio
+and a motor selection). They read zero while disarmed or at throttle cutoff.
+Heading error also resets during an intentional yaw command outside the
+existing +/-20 deadband. With neutral yaw and active throttle, persistent
+clockwise motion should produce negative heading error and negative correction.
+The heading error is relative gyro integration, not a compass heading.
+
+The existing SW11/SW12 received roll/pitch views remain available. These views
+do not add motor offsets or enable the position estimator in motor control.
+
+November 23 validation:
+- FlightController and SevenSegmentDisplay unit tests passed, including signed
+  telemetry, stopped-state behavior and signed three-digit formatting.
+- New physical SPI/iBUS board test passed: yaw-rate signs and auto range,
+  heading accumulation/cap, correction direction/limit, health loss, selector
+  priority, disarmed readout and unchanged motor commands during view changes.
+- Existing flight/arming/battery/light, RC-axis and ultrasonic hover board
+  regressions passed, including the 500ms handover and RC/disarm stop paths.
+- Placed utilization: 16,505 LUTs (79.35%), 46 DSPs (51.11%). Setup WNS
+  +7.299ns, hold WHS +0.049ns; no failing timing endpoints or DRC errors.
+- Bitstream SHA256:
+  `C1A68D1AF8F2CD4C7853A912CA4AE1235377FBA2509985C6A61F25D72EB3266F`.
+- Flash programmed and verified; FPGA booted from QSPI with DONE=1. Previous
+  4MB backup: `build/flash_before_battery_lights_flight_test_20261123_004454.bin`.
+  Programming log: `program_yaw_diagnostics.log`. Physical yaw signs and drift
+  behavior still require the operator's measurements.
+
+## RC axis monitor - November 22, 2026
+
+Current default image: SW7 selects received yaw (CH4), SW11 roll (CH1), and
+SW12 pitch (CH2), replacing the throttle and two inactive position views.
+Each displays the signed pre-deadband command in -500..+500 units: center is
+` 000`, positive 25 is ` 025`, negative 25 is `-025`. Values are clamped channel
+counts minus 1500, not measured angles or motor outputs. No offset is applied.
+Invalid/stale radio data shows dashes, not a misleading zero.
+
+Select one view at a time. Priority is configuration > SW14 error > SW11 RC roll
+> SW12 RC pitch > SW10 ultrasonic > SW9 NPU > SW8 IMU roll > SW13 battery
+> SW7 RC yaw > default status. LD7 still indicates radio health; LD11/12 retain
+AI-request and actual hover-state indications. View switches cannot change motor
+commands, arming, hover or NPU permissions. The optional position-only profile
+(ENABLE_POSITION_DIAGNOSTICS=1) retains its older SW11/SW12 X/Y diagnostics; the
+uploaded hover profile keeps that estimator excluded and uses these RC views.
+
+Record both centered-stick values and the sustained signed inputs needed to
+counter drift. Commands within the controller's existing +/-20 deadband still
+appear here even though they do not request an attitude/rate change.
+
+Earlier SW7 throttle / SW11-SW12 unused or position descriptions are superseded
+for this default image. RC trim/offset corrections are not being enabled yet.
+
+November 22 validation/upload:
+- SevenSegmentDisplay signed-token/glyph tests and physical-iBUS RC monitor
+  tests passed: all three channel routes, neutral/near-zero/signed endpoints,
+  input clamping, selector priority, timeout dashes and armed-flight isolation.
+- Existing flight/battery/IMU display, NPU/USB and ultrasonic board regressions
+  passed. The displayed sign and digits use the same latched display sweep.
+- Final placed utilization: 16,244 LUTs (78.10%) and 46 DSPs (51.11%). Setup
+  WNS +7.622ns, hold WHS +0.019ns; no failing endpoints or DRC errors.
+- Flash programmed and verified; QSPI boot completed with DONE=1. Previous
+  4MB backup: `build/flash_before_battery_lights_flight_test_20261122_213654.bin`.
+
+
+## Ultrasonic hover and throttle pickup ? November 20, 2026
+
+SwD / CH10 now activates height capture. Entry requires actual arming, all four
+motor selectors, fresh 80..2000mm ultrasonic range, attitude within +/-15deg,
+healthy control inputs and pilot throttle >=100/1000. SwD must be observed OFF
+then ON. It captures current distance and throttle, with no automatic takeoff.
+A ground reading of 120 is 120mm from sensor to ground, not a required zero.
+
+The hover image disables the IMU-only X/Y diagnostic estimator to fit alongside
+hover and the NPU (`ENABLE_POSITION_DIAGNOSTICS=0`). SW11/SW12 are inactive in this
+image; their source and separate diagnostic capability are retained. Attitude
+stabilization and yaw control do not depend on that estimator.
+
+SwD OFF continues height hold until pilot throttle reaches the current holding
+command, then blends to manual over 500ms. A zero stick does not cancel hover or
+bypass the pending-pickup protection. The effective collective feeds both the
+flight controller and motor-idle gate. SW15 OFF still immediately stops motors;
+RC/IMU/control failure retains existing disarm/rearm behavior.
+
+Unusable/stale ultrasonic data, excessive height-loop tilt, or an implausible
+step freezes the last collective and flags a fault, while permitting manual
+pickup. This preserves a command; it cannot maintain height without valid
+sensing. LD12: healthy hold solid; pickup/blend/degraded/rejected request blinking;
+manual off. E031 reports hover failure; E030 and other existing errors keep their
+priority. SW10 remains distance mm; SW9 NPU remains display-only. Height gains
+are initial values and have not been flight tuned.
+
+See [HOVER.md](../../Drone/FlightController/HOVER.md). The legacy exact-motor
+regression explicitly disables hover; the new `HoverBench_tb` tests the enabled
+physical UART/SPI/echo-to-ESC path, including zero-stick pickup and disarm/RC loss.
+Older descriptions of hover as request-only or disconnected are superseded.
+
+Hover upload validation (November 20):
+- Updated HoverController unit tests passed: actual 120mm offset capture,
+  entry/window checks, correction/filter signs, zero-stick hold, live pickup,
+  smooth signed handover, recapture, freeze on range/tilt failure, and disarm/reset.
+- All six board benches passed, including the actual 500ms handover with CH10
+  iBUS traffic, physical echo pulses, SPI IMU and all four decoded ESC outputs.
+  Existing NPU display/USB, radio lights, battery, manual controls and board
+  clock/serial/DShot timing checks remain passing.
+- The first combined hover/X/Y diagnostic build exceeded logic capacity and
+  was not uploaded. The fitted image disables only that optional estimator.
+- Final placed utilization: 16,172 LUTs (77.75%) and 46 DSPs (51.11%). Setup WNS
+  +7.299ns, hold WHS +0.049ns; no failing timing endpoints or DRC errors.
+- Flash programmed/verified; FPGA QSPI boot confirmed DONE=1. Previous 4MB
+  backup: `build/flash_before_battery_lights_flight_test_20261120_151858.bin`.
+- Actual ultrasonic behavior under motor noise and flight gains still require
+  physical validation; these simulations do not establish flight performance.
+
+
+## Display-only NPU update — November 20, 2026
+
+SW9 now shows the latest lidar NPU prediction instead of the center-four
+average. Confirmed model classes: 0 `Cont`, 1 `LEFt`, 2 `rIGt`, 3 `uP`, 4 `StoP`.
+The NPU uses the supplied weights and biases over a private coherent copy of
+the same 64-pixel frame streamed over USB. A fresh complete frame is required;
+stale/unhealthy lidar clears the prediction and displays dashes. LD9 remains
+the lidar scan-health indicator. Existing higher-priority views are unchanged:
+configuration, SW14 error, SW11/SW12 position, and SW10 ultrasonic override SW9.
+
+The classifier is display-only. Both NPU motor-override inputs remain tied low
+at the flight controller, including when the radio AI-request switch is on.
+Flight-drift behavior and existing IMU fault handling are unchanged by this update.
+The production `Drone` top keeps NPU disabled by default; this bench enables it.
+
+See [NPU integration](../../Drone/NPU/README.md) for the model contract and tests.
+Earlier sections below describe prior images and are superseded where they
+refer to SW9 as a center-distance view or NPU as absent.
+
+November 20 validation and upload:
+- All 33 shared-module tests and five board-level benches passed across the
+  validation runs. NPU comparisons cover all five scores on 20 independent
+  reference frames and all five classes. Physical segment masks, class mapping,
+  coherent USB data, stale suppression and motor-override isolation are checked.
+- The first cache implementation exceeded logic capacity and was not uploaded.
+  A single-port RAM cache preserves the same inference arithmetic and inputs.
+- Final placement uses 19,836 LUTs (95.37%) and 79 DSPs (87.78%). Setup WNS
+  +7.535ns and hold WHS +0.041ns; no failing timing endpoints or DRC errors.
+- Flash programmed and verified; FPGA QSPI boot completed with DONE=1.
+  Previous 4MB image: `build/flash_before_battery_lights_flight_test_20261120_133745.bin`.
+- A subsequent eight-second COM5 read received no USB depth packets. Physical
+  lidar power/status and the visible prediction still require user confirmation;
+  successful digital inference tests are not a live sensor accuracy check.
+
 This new top, `BatteryLightsFlightTest`, retains the earlier radio/IMU/controller
 test and uses shared modules directly from `../../Drone/`. Earlier tests are
 preserved. It adds the existing `Drone/System/BatteryMonitor.v`, external light

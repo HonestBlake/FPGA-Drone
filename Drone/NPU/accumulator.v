@@ -1,4 +1,7 @@
-module accu(clk, rst, product, enable, acc);
+`timescale 1ns / 1ps
+`ifndef DRONE_NPU_ACCUMULATOR_V
+`define DRONE_NPU_ACCUMULATOR_V
+module accumulator(clk, rst, product, enable, acc);
 input clk;
 input rst;
 input enable;
@@ -12,3 +15,5 @@ always @(posedge clk) begin
         acc <= acc + product;
 end
 endmodule
+
+`endif

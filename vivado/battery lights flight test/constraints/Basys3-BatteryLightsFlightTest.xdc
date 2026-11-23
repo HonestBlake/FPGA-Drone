@@ -100,3 +100,6 @@ set_false_path -from [get_ports lidar_rx] -to [get_cells -hierarchical -filter {
 set_property -dict { PACKAGE_PIN N17 IOSTANDARD LVCMOS33 } [get_ports ultrasonic_trigger]
 set_property -dict { PACKAGE_PIN P18 IOSTANDARD LVCMOS33 PULLDOWN true } [get_ports ultrasonic_echo]
 set_false_path -from [get_ports ultrasonic_echo] -to [get_cells -hierarchical -filter {NAME =~ *echo_meta_reg}]
+
+# Newly added diagnostic view selectors: asynchronous inputs to first-stage synchronizers only.
+set_false_path -from [get_ports {sw[4] sw[5] sw[6]}] -to [get_cells -hierarchical -filter {NAME =~ *yaw_diag_meta_reg*}]

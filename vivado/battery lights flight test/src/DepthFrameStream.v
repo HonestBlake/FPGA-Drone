@@ -8,6 +8,9 @@ module DepthFrameStream #(parameter integer CLK_FREQ=10_000_000)(
     input wire [15:0] distance_mm,
     output reg [15:0] center_mm,
     output reg center_valid,
+    output wire pixel_valid,
+    output wire [5:0] pixel_address,
+    output wire [15:0] pixel_mm,
     output wire uart_tx
 );
     reg [15:0] pixels [0:63];
@@ -21,6 +24,9 @@ module DepthFrameStream #(parameter integer CLK_FREQ=10_000_000)(
     reg [7:0] data;
     wire ready;
     assign read_address=capture_index;
+    assign pixel_valid=capturing && !rst;
+    assign pixel_address=capture_index;
+    assign pixel_mm=distance_mm;
     always @* begin
         if(byte_index==0) data=8'h4c;
         else if(byte_index==1) data=8'h38;

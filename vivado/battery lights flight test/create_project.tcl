@@ -8,5 +8,7 @@ add_files -fileset sim_1 -norecurse [list [file join $test_dir sim BatteryLights
 set_property include_dirs [list [file join $test_dir sim]] [get_filesets sim_1]
 set_property top BatteryLightsFlightTest_tb [get_filesets sim_1]
 set_property xsim.simulate.runtime all [get_filesets sim_1]
-update_compile_order -fileset sources_1
+set_property include_dirs [list [file join $shared_dir NPU]] [get_filesets sources_1]
+    set_property file_type SystemVerilog [get_files NPU.v]
+    update_compile_order -fileset sources_1
 update_compile_order -fileset sim_1

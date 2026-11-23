@@ -64,7 +64,18 @@ module FlightController #(
     output wire [10:0] front_left_throttle,
     output wire [10:0] back_right_throttle,
     output wire [10:0] back_left_throttle,
-    output reg signed [15:0] roll_setpoint_cd
+    output reg signed [15:0] roll_setpoint_cd,
+    // Read-only observations. Rate is the actual latched feedback; heading is
+    // target-minus-measured angle. Correction is body yaw (+CW), before motor
+    // clipping, latched with the motor command and zero while stopped.
+    output wire signed [15:0] measured_yaw_rate_cdps,
+    output wire signed [15:0] heading_error_cd,
+    output reg signed [15:0] yaw_correction_counts,
+    // Positive pitch angle/rate/correction raises the nose. Correction is
+    // latched with motor commands, before clipping, and zero while stopped.
+    output wire signed [15:0] measured_pitch_cd,
+    output wire signed [15:0] measured_pitch_rate_cdps,
+    output reg signed [15:0] pitch_correction_counts
 );
     localparam [2:0] CONTINUE = 3'd0, STOP = 3'd1, DIVERT_UP = 3'd2,
                      DIVERT_LEFT = 3'd3, DIVERT_RIGHT = 3'd4;
@@ -105,6 +116,10 @@ module FlightController #(
         else if(imu_sample_valid && imu_fresh) yaw_error_q16 <= next_yaw_error;
     end
 
+    assign measured_yaw_rate_cdps = yaw_rate;
+    assign measured_pitch_cd = pitch_cd;
+    assign measured_pitch_rate_cdps = pitch_rate;
+    assign heading_error_cd = yaw_error_q16 / 65536;
     assign available = !rst;
     assign imu_fresh = !rst && imu_seen && imu_age < IMU_CYCLES &&
                        imu_valid && imu_calibrated && !imu_fault;
@@ -236,6 +251,8 @@ module FlightController #(
     always @(posedge clk) begin
         if (rst || !motors_armed) begin
             motor_fr <= 0; motor_fl <= 0; motor_br <= 0; motor_bl <= 0;
+            yaw_correction_counts <= 0;
+            pitch_correction_counts <= 0;
             avoidance_active <= 0; applied_action <= CONTINUE;
             roll_setpoint_cd <= 0; pitch_setpoint_cd <= 0;
             yaw_rate_setpoint_cdps <= 0; thrust_setpoint <= 0;
@@ -246,8 +263,12 @@ module FlightController #(
             yaw_rate_setpoint_cdps <= next_yaw;
             thrust_setpoint <= next_thrust;
             if (next_thrust == 0) begin
+                yaw_correction_counts <= 0;
+                pitch_correction_counts <= 0;
                 motor_fr <= 0; motor_fl <= 0; motor_br <= 0; motor_bl <= 0;
             end else begin
+                yaw_correction_counts <= YAW_MIX_SIGN * yaw_correction;
+                pitch_correction_counts <= pitch_correction;
                 // FRD body axes: +roll right-down, +pitch nose-up, +yaw right.
                 // Assumed spin viewed from above: FR/BL CCW, FL/BR CW.
                 motor_fr <= clamp_motor(base - roll_correction + pitch_correction + yaw_correction);

@@ -25,6 +25,8 @@ module FlightController_tb;
     always #5 clk = ~clk;
     always @(negedge clk) cycle = cycle + 1;
     // Small clock-frequency parameter makes the watchdog boundaries quick to test.
+    wire signed [15:0] debug_yaw_rate,debug_heading_error,debug_yaw_correction;
+    wire signed [15:0] debug_pitch,debug_pitch_rate,debug_pitch_correction;
     FlightController #(.CLK_FREQ(10_000), .IMU_TIMEOUT_MS(20),
         .CONTROL_TIMEOUT_MS(5), .NPU_TIMEOUT_MS(10)) dut (
         .clk(clk), .rst(rst), .control_tick(control_tick), .throttle(throttle),
@@ -69,6 +71,10 @@ module FlightController_tb;
         .imu_roll_cd(imu_roll), .imu_pitch_cd(imu_pitch),
         .imu_roll_rate_cdps(imu_p), .imu_pitch_rate_cdps(imu_q), .imu_yaw_rate_cdps(imu_r),
         .npu_available(npu_available), .npu_action_valid(npu_action_valid), .npu_action(npu_action),
+        .measured_yaw_rate_cdps(debug_yaw_rate), .heading_error_cd(debug_heading_error),
+        .yaw_correction_counts(debug_yaw_correction),
+        .measured_pitch_cd(debug_pitch),.measured_pitch_rate_cdps(debug_pitch_rate),
+        .pitch_correction_counts(debug_pitch_correction),
         .roll_setpoint_cd(), .pitch_setpoint_cd(),
         .front_right_throttle(), .front_left_throttle(),
         .back_right_throttle(), .back_left_throttle()
@@ -164,14 +170,19 @@ module FlightController_tb;
 
         imu_roll = 500; step(12); check_motors(1109, 985, 1109, 985);
         imu_roll = 0; imu_pitch = 500; step(12); check_motors(985, 985, 1109, 1109);
+        if(debug_pitch!=500 || debug_pitch_rate!=0 || debug_pitch_correction!=-62)
+            $fatal(1,"Nose-up pitch angle/correction diagnostic sign");
         imu_pitch = 0; imu_p = 1024; step(12); check_motors(1063, 1031, 1063, 1031);
         imu_p = 0; imu_q = 1024; step(12); check_motors(1031, 1031, 1063, 1063);
+        if(debug_pitch!=0 || debug_pitch_rate!=1024 || debug_pitch_correction!=-16)
+            $fatal(1,"Pitch rate damping diagnostic sign");
         imu_q = 0; imu_r = 1024; step(12); check_motors(1015, 1079, 1079, 1015);
         imu_r = 0; step(12);
         // Samples are latched atomically; bus changes alone must not alter mixing.
         stream_imu = 0; held_motors = {fr, fl, br, bl};
         imu_roll = 2000; imu_pitch = -2000; step(12);
         if ({fr, fl, br, bl} !== held_motors) $fatal(1, "IMU bus used without sample strobe");
+        if(debug_pitch!=0 || debug_pitch_rate!=0) $fatal(1,"Pitch telemetry used without sample strobe");
         imu_roll = 0; imu_pitch = 0; stream_imu = 1; step(12);
 
         npu_available = 1; avoidance_enable = 1; pitch_command = 500; yaw_command = 250;
@@ -252,11 +263,17 @@ module FlightController_tb;
         imu_roll=0;imu_pitch=0;imu_p=0;imu_q=0;imu_r=1000;step(500);
         if(heading_hold.next_yaw!=0 || heading_hold.yaw_error_q16>=-30*65536)
             $fatal(1,"Neutral yaw deadband / integrated heading error");
+        if(debug_yaw_rate!=1000 || debug_heading_error>=-30 || debug_yaw_correction>=0)
+            $fatal(1,"Yaw diagnostic direction/rate/heading feedback");
         imu_r=0;step(20);
         if(heading_hold.motor_fr<=heading_hold.motor_fl || heading_hold.motor_bl<=heading_hold.motor_br)
             $fatal(1,"Heading correction lost at zero yaw rate / mixer sign");
+        if(debug_yaw_rate!=0 || debug_yaw_correction>=0)
+            $fatal(1,"Persisting heading correction diagnostic");
         imu_r=30000;step(2000);
         if(heading_hold.yaw_error_q16!=-3000*65536) $fatal(1,"Heading integral bound");
+        if(debug_heading_error!=-3000 || debug_yaw_correction!=-400)
+            $fatal(1,"Heading/correction limit diagnostics");
         yaw_command=100;step(10);
         if(heading_hold.yaw_error_q16!=0) $fatal(1,"Pilot turn did not release heading hold");
         yaw_command=0;imu_r=0;step(20);
@@ -264,6 +281,13 @@ module FlightController_tb;
             $fatal(1,"Heading target did not recapture on stick release");
         throttle=0;step(10);
         if(heading_hold.yaw_error_q16!=0) $fatal(1,"Idle integral reset");
+        if(debug_yaw_correction!=0 || debug_heading_error!=0)$fatal(1,"Idle diagnostics");
+        if(debug_pitch_correction!=0)$fatal(1,"Idle pitch correction diagnostic");
+        arm_request=0;imu_r=1000;imu_pitch=123;imu_q=-456;step(10);
+        if(debug_yaw_rate!=1000 || debug_yaw_correction!=0 || debug_heading_error!=0)
+            $fatal(1,"Disarmed gyro visibility / stopped correction");
+        if(debug_pitch!=123 || debug_pitch_rate!=-456 || debug_pitch_correction!=0)
+            $fatal(1,"Disarmed pitch visibility / stopped correction");
         rst = 1; step(1); check_stop;
         if (available || command_valid || imu_fresh || npu_fresh) $fatal(1, "Active reset status");
         $display("PASS: stabilization, mixing, arming, five NPU actions, gating, saturation, watchdogs and recovery");

@@ -9,7 +9,9 @@ module DepthFrameStream_tb;
  reg [7:0] packet[0:135];
  integer n,b,sum;
  always #125 clk=~clk;
- DepthFrameStream #(.CLK_FREQ(4_000_000)) dut(clk,rst,frame_valid,frame_count,address,distance,center,valid,tx);
+ DepthFrameStream #(.CLK_FREQ(4_000_000)) dut(
+  .clk(clk),.rst(rst),.frame_valid(frame_valid),.frame_count(frame_count),.read_address(address),
+  .distance_mm(distance),.center_mm(center),.center_valid(valid),.uart_tx(tx));
  task receive;
   output [7:0] value;
   integer bitno;

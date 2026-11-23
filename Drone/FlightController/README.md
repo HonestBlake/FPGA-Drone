@@ -1,8 +1,30 @@
 # Flight-computer prototype
 
-The standalone [experimental height-hold helper](HOVER.md) and HC-SR04 driver
-have been added for future integration. They are not instantiated or enabled in
-this controller or the uploaded hardware test. The behavior below is unchanged.
+The board test now instantiates the [experimental height-hold helper](HOVER.md)
+and HC-SR04 driver. It selects hover/manual collective before this controller's
+throttle input, preserving attitude mixing and arm/health gates. SwD / CH10
+captures height; OFF keeps holding until throttle pickup and a 500ms handover.
+The production `Drone` top does not automatically enable this bench integration.
+The core controller interface and behavior below remain unchanged.
+
+The November 23 bench image exposes three read-only controller outputs:
+`measured_yaw_rate_cdps` is the latched yaw feedback (100 = 1 degree/second),
+`heading_error_cd` is target-minus-measured relative yaw error (100 = 1 degree),
+and `yaw_correction_counts` is the requested body-yaw correction before
+individual motor clipping. Positive means clockwise viewed from above,
+independent of `YAW_MIX_SIGN`. Correction is latched with motor commands and
+is zero while disarmed or at throttle cutoff. Heading error follows the
+existing reset/deadband/limit policy. The board displays these on SW4/SW5/SW6;
+the ports do not change the controller's calculations or gains.
+
+Additional pitch observations expose the same latched feedback:
+`measured_pitch_cd` (100 = 1deg, positive nose-up),
+`measured_pitch_rate_cdps` (100 = 1deg/s, positive nose rotating up), and
+`pitch_correction_counts` (positive requests nose-up torque). Correction is
+latched with the motor commands before individual clipping, zero while stopped.
+Measured angle/rate remain observable while disarmed. In the bench image,
+SW8 combined with SW4/SW5/SW6 selects angle/correction/rate respectively. No
+attitude trim, integrator or new gain is introduced by those diagnostic ports.
 
 `FlightController` consumes the mapped radio commands, a fused IMU estimate,
 and an optional front-facing obstacle action. It generates four ordinary DShot
@@ -246,5 +268,12 @@ clears while disarmed, idle, unhealthy, or under avoidance control. It is relati
 gyro heading hold, not absolute compass lock: gyro bias and mounting errors can
 still drift. Gains remain prototype values requiring physical verification.
 The generic shared default remains the original rate-only controller.
+
+The November 23 `battery lights flight test` gain trial uses heading gain 16
+instead of the shared default 8. With the same +/-30deg heading bound, this
+increases the heading-only contribution at zero yaw rate from +/-93 to +/-187
+motor-command counts; combined yaw correction still clamps at +/-400. The
+yaw-rate gain remains 8. This bench-only trial follows measured gyro/correction
+direction checks and is not a validated airframe tune. No fixed trim is added.
 
 The [position diagnostic](POSITION.md) is separate and never feeds motor commands.

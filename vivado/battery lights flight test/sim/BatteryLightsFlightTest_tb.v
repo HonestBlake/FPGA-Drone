@@ -15,7 +15,7 @@ module BatteryLightsFlightTest_tb;
     integer i;
     always #41.667 clk=~clk;
     BatteryLightsFlightTest #(.CLK_FREQ(12_000_000), .CORE_CLK_DIV(1), .BAUD_RATE(1_000_000), .RC_TIMEOUT_MS(10),
-        .BATTERY_FILTER_SAMPLES(1), .BATTERY_UPDATE_HZ(12_000_000), .YAW_HEADING_HOLD(0), .CONTROL_HZ(12_000), .IMU_POWERUP_CYCLES(20), .IMU_RESET_CYCLES(20),
+        .BATTERY_FILTER_SAMPLES(1), .BATTERY_UPDATE_HZ(12_000_000), .YAW_HEADING_HOLD(0), .ENABLE_HOVER(0), .ENABLE_POSITION_DIAGNOSTICS(1), .CONTROL_HZ(12_000), .IMU_POWERUP_CYCLES(20), .IMU_RESET_CYCLES(20),
         .IMU_WAKE_CYCLES(20), .IMU_CALIBRATION_SAMPLES(4), .IMU_TIMEOUT_MS(10),
         .MOTOR_UPDATE_HZ(12_000), .MOTOR_STARTUP_MS(2), .DISPLAY_REFRESH_HZ(12_000)) dut (
         .ultrasonic_echo(sonar_echo), .ultrasonic_trigger(sonar_trigger), .lidar_rx(1'b1), .lidar_tx(), .usb_uart_tx(), .battery_vin_p(1'b0), .battery_vin_n(1'b0), .light_out(light_out),
@@ -70,7 +70,7 @@ module BatteryLightsFlightTest_tb;
         input arm;
         begin
             channel(1,roll); channel(2,pitch); channel(3,thrust);
-            channel(4,yaw); channel(5,1500); // CH5 may stay unconfigured; SW4 controls arming.
+            channel(4,yaw); channel(5,1500); // CH5 may stay unconfigured; SW15 controls arming.
             sw[15]=arm;
             send_frame(0);
             clocks(1200);
@@ -160,7 +160,7 @@ module BatteryLightsFlightTest_tb;
         if(!led[11] || !led[12]) $fatal(1,"CH7/10 requests not visible");
         check_frame(1047,1047,1047,1047); // Future mode requests cannot change motors.
         channel(7,1000); channel(10,1000); send_frame(0); clocks(1200);
-        check_display(16'ha17d); sw[7]=1; clocks(6); check_display(16'h0500); check_status_leds(0); check_status_leds(1);
+        check_display(16'ha17d); sw[7]=1; clocks(6); check_display(16'hc000); check_status_leds(0); check_status_leds(1);
         sw[8]=1; clocks(6);
         force dut.roll_cd=16'sd2000; check_display(16'h0020);
         force dut.roll_cd=-16'sd2000; check_display(16'h0020);
@@ -207,7 +207,7 @@ module BatteryLightsFlightTest_tb;
         check_frame(907,1437,937,907);
         controls(1009,2000,1000,1750,1);
         check_frame(0,0,0,0); // Cutoff overrides all attitude/rate corrections.
-        sw[7]=1; clocks(6); check_display(16'h0009); check_status_leds(0); check_status_leds(1);
+        sw[7]=1; clocks(6); check_display(16'hc250); check_status_leds(0); check_status_leds(1);
 
         // User's position-to-wire mapping must survive mixer integration.
         rearm(1); controls(1500,1500,1500,1500,1);
@@ -301,7 +301,7 @@ module BatteryLightsFlightTest_tb;
         // Reset bus fault before checking battery/lighting independently of radio.
         btnC=1; clocks(5); btnC=0; clocks(50);
         // Real UART packets: all 3x2x2x2 light and future-request combinations.
-        sw[15]=0; sw[6:4]=7; // Old board light switches must not interfere.
+        sw[15]=0; sw[6:4]=7; // Diagnostic selectors must not alter radio-controlled lights.
         for(i=0;i<24;i=i+1) begin
             channel(7,((i/6)%2) ? 2000 : 1000);
             channel(8,((i/3)%2) ? 2000 : 1000);
@@ -326,7 +326,8 @@ module BatteryLightsFlightTest_tb;
         wait(!dut.rc_valid);clocks(2);
         if(light_out!==0 || led[11] || led[12]) $fatal(1,"Radio timeout did not clear aux outputs");
         sw[4]=1; clocks(6);
-        if(dut.arm_request) $fatal(1,"Old SW4 still arms");
+        if(dut.arm_request) $fatal(1,"SW4 diagnostic must not arm");
+        sw[6:4]=0;clocks(6); // Clear every diagnostic selector before testing position views.
         dut.battery.xadc.sample_code=2688; clocks(50);
         if(dut.battery_percent!==0) $fatal(1,"Battery empty endpoint");
         dut.battery.xadc.sample_code=2957; clocks(50);
@@ -458,6 +459,9 @@ module BatteryLightsFlightTest_tb;
                         glyph(expected[digit*4 +: 4]);
                     if(dut.roll_view_active && digit==3)
                         expected_seg=dut.roll_cd[15] ? 7'h3f : 7'h7f;
+                    if(digit==3 && (expected[15:12]==4'hc || expected[15:12]==4'hd) &&
+                       expected[11:0]<=12'h500 && expected[7:4]<=9 && expected[3:0]<=9)
+                        expected_seg=expected[15:12]==4'hd ? 7'h3f : 7'h7f;
                     if(dut.position_view_active && digit==3)
                         expected_seg=dut.position_value_mm[31] ? 7'h3f : 7'h7f;
                     if(expected == 16'hc0f6) begin

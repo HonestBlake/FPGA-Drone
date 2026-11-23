@@ -7,6 +7,7 @@ module SevenSegmentDisplay #(
     parameter integer REFRESH_HZ = 250, // Complete four-digit sweeps per second.
     parameter integer BLANK_CYCLES = (CLK_FREQ / 100_000 < 2) ? 2 : CLK_FREQ / 100_000,
     parameter integer F_IS_MINUS = 0, // Optional dash for board-test status.
+    parameter integer RC_AXIS_WORDS = 0, // Cddd blank/sign-positive, Dddd minus; BCD 0..999.
     parameter integer STATUS_WORDS = 0 // C0F6=CnFG, ADBF=ready, A17D=Arnd.
 ) (
     input wire clk,
@@ -117,6 +118,33 @@ module SevenSegmentDisplay #(
                             0: seg <= 7'h11; // y
                         endcase
                     end
+                    // NPU command tokens B100..B104: Continue, Stop, Up, Left, Right.
+                    if (STATUS_WORDS && active_value>=16'hb100 && active_value<=16'hb104) begin
+                        case (active_value)
+                            16'hb100: case(digit) // Cont
+                                3:seg<=7'h46; 2:seg<=7'h23; 1:seg<=7'h2b; 0:seg<=7'h07;
+                            endcase
+                            16'hb101: case(digit) // StoP
+                                3:seg<=7'h12; 2:seg<=7'h07; 1:seg<=7'h23; 0:seg<=7'h0c;
+                            endcase
+                            16'hb102: case(digit) //   uP
+                                3:seg<=7'h7f; 2:seg<=7'h7f; 1:seg<=7'h63; 0:seg<=7'h0c;
+                            endcase
+                            16'hb103: case(digit) // LEFt
+                                3:seg<=7'h47; 2:seg<=7'h06; 1:seg<=7'h0e; 0:seg<=7'h07;
+                            endcase
+                            16'hb104: case(digit) // rIGt
+                                3:seg<=7'h2f; 2:seg<=7'h79; 1:seg<=7'h42; 0:seg<=7'h07;
+                            endcase
+                        endcase
+                    end
+                    // Reserved RC decimal tokens: C000..C999 / D000..D999.
+                    // Decode the sign from the same latched sweep as its digits.
+                    // Validate BCD so the existing CnFG token C0F6 is unaffected.
+                    if (RC_AXIS_WORDS && digit==3 &&
+                        (active_value[15:12]==4'hc || active_value[15:12]==4'hd) &&
+                        active_value[11:8]<=9 && active_value[7:4]<=9 && active_value[3:0]<=9)
+                        seg <= active_value[15:12]==4'hd ? 7'h3f : 7'h7f;
                     dp <= !active_points[digit];
                 end
                 if (counter == BLANK_CYCLES - 1)

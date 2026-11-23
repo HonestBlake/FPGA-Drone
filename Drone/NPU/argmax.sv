@@ -1,3 +1,6 @@
+`timescale 1ns / 1ps
+`ifndef DRONE_NPU_ARGMAX_SV
+`define DRONE_NPU_ARGMAX_SV
 
 module argmax (
     input wire signed [31:0] scores [0:4],
@@ -20,3 +23,5 @@ module argmax (
     end
 
 endmodule
+
+`endif

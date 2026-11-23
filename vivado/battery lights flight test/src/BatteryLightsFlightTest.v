@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 // Physical radio + IMU estimator + flight controller + selected ESC outputs.
-// Shared design files under Drone/ are used directly; lidar is acquired only for USB viewing; no NPU instance.
+// Shared design files under Drone/ are used directly; lidar is acquired for USB viewing and display-only NPU inference.
 module BatteryLightsFlightTest #(
     parameter integer CLK_FREQ = 100_000_000,
     parameter integer CORE_CLK_DIV = 20,
@@ -26,13 +26,21 @@ module BatteryLightsFlightTest #(
     parameter integer RATE_KD = 4,
     parameter integer YAW_KP = 8,
     parameter integer YAW_HEADING_HOLD = 1,
+    parameter integer ENABLE_HOVER = 1,
+    parameter integer ENABLE_POSITION_DIAGNOSTICS = 0,
+    parameter integer HOVER_HANDOVER_MS = 500,
+    // Confirmed trained labels: 0 Continue, 1 Left, 2 Right, 3 Up, 4 Stop.
+    parameter [14:0] NPU_CLASS_ACTIONS = {3'd1,3'd2,3'd4,3'd3,3'd0},
     parameter integer LIDAR_STARTUP_MS = 1000,
     parameter integer LIDAR_SETTLE_MS = 5000,
     parameter integer LIDAR_POLL_MS = 100,
     parameter integer LIDAR_RESPONSE_TIMEOUT_MS = 8000,
     parameter integer LIDAR_BYTE_TIMEOUT_MS = 500,
     parameter integer LIDAR_FRESH_MS = 2000,
-    parameter integer IMU_MOUNT_FRD = 0 // Measured level raw Z is approximately +16384.
+    parameter integer IMU_MOUNT_FRD = 0, // Measured level raw Z is approximately +16384.
+    // Bench tuning: +/-30deg heading error contributes up to +/-187 counts.
+    // Shared controller default remains 8; rate damping stays at YAW_KP=8.
+    parameter integer YAW_HEADING_KP = 16
 ) (
     input wire clk, btnC, tx,
     input wire lidar_rx, ultrasonic_echo,
@@ -97,22 +105,25 @@ module BatteryLightsFlightTest #(
 
     (* ASYNC_REG = "TRUE" *) reg battery_view_meta, battery_view, error_view_meta, error_view;
     (* ASYNC_REG = "TRUE" *) reg range_view_meta, range_view, lidar_view_meta, lidar_view;
-    (* ASYNC_REG = "TRUE" *) reg throttle_view_meta, throttle_view, imu_view_meta, imu_view;
+    (* ASYNC_REG = "TRUE" *) reg yaw_view_meta, yaw_view, imu_view_meta, imu_view;
+    (* ASYNC_REG = "TRUE" *) reg [2:0] yaw_diag_meta,yaw_diag_view;
     (* ASYNC_REG = "TRUE" *) reg posx_meta,posx_view,posy_meta,posy_view;
     always @(posedge logic_clk) begin
         if (rst) begin
+            yaw_diag_meta<=0;yaw_diag_view<=0;
             posx_meta<=0;posx_view<=0;posy_meta<=0;posy_view<=0;
             imu_view_meta <= 0; imu_view <= 0;
-            throttle_view_meta <= 0; throttle_view <= 0;
+            yaw_view_meta <= 0; yaw_view <= 0;
             lidar_view_meta <= 0; lidar_view <= 0;
             range_view_meta <= 0; range_view <= 0;
             battery_view_meta <= 0; battery_view <= 0;
             error_view_meta <= 0; error_view <= 0;
         end
         else begin
+            yaw_diag_meta<=sw[6:4];yaw_diag_view<=yaw_diag_meta;
             posx_meta<=sw[11];posx_view<=posx_meta;posy_meta<=sw[12];posy_view<=posy_meta;
             imu_view_meta <= sw[8]; imu_view <= imu_view_meta;
-            throttle_view_meta <= sw[7]; throttle_view <= throttle_view_meta;
+            yaw_view_meta <= sw[7]; yaw_view <= yaw_view_meta;
             lidar_view_meta <= sw[9]; lidar_view <= lidar_view_meta;
             range_view_meta <= sw[10]; range_view <= range_view_meta;
             battery_view_meta <= sw[13]; battery_view <= battery_view_meta;
@@ -130,7 +141,7 @@ module BatteryLightsFlightTest #(
         input [15:0] value;
         begin aux_valid = value >= 900 && value <= 2100; end
     endfunction
-    // Requests only: AI/hover control paths remain inactive in this test.
+    // AI stays display-only; CH10 SwD controls the ultrasonic height hold.
     wire ai_override_request = !rst && rc_valid && aux_valid(aux_a) && aux_a >= 1750;
     wire hover_request = !rst && rc_valid && aux_valid(aux_d) && aux_d >= 1750;
     wire [2:0] light_sync = {
@@ -177,24 +188,34 @@ module BatteryLightsFlightTest #(
     end
     wire lidar_healthy=lidar_initialized && lidar_image_valid && !lidar_failed &&
                        lidar_age<LIDAR_FRESH_CYCLES;
+    wire npu_pixel_valid, npu_available, npu_action_valid;
+    wire [5:0] npu_pixel_address;
+    wire [15:0] npu_pixel_mm;
+    wire [2:0] npu_action;
+    wire [2:0] npu_command = npu_action<=4 ? NPU_CLASS_ACTIONS[npu_action*3 +: 3] : 3'd7;
+    NPU #(.ENABLE(1)) npu (
+        .clk(logic_clk), .rst(rst), .healthy(lidar_healthy),
+        .pixel_valid(npu_pixel_valid), .pixel_address(npu_pixel_address), .pixel_mm(npu_pixel_mm),
+        .available(npu_available), .action_valid(npu_action_valid), .action(npu_action));
     wire [15:0] lidar_center_mm;
     wire lidar_center_valid;
     DepthFrameStream #(.CLK_FREQ(LOGIC_FREQ)) depth_stream(
         .clk(logic_clk), .rst(rst), .frame_valid(lidar_frame_valid),
         .frame_count(lidar_frame_count), .read_address(lidar_read_address),
         .distance_mm(lidar_distance_mm), .center_mm(lidar_center_mm),
-        .center_valid(lidar_center_valid), .uart_tx(usb_uart_tx));
+        .center_valid(lidar_center_valid), .pixel_valid(npu_pixel_valid),
+        .pixel_address(npu_pixel_address), .pixel_mm(npu_pixel_mm), .uart_tx(usb_uart_tx));
     wire [15:0] ultrasonic_distance_mm;
-    wire ultrasonic_valid, ultrasonic_done;
+    wire ultrasonic_valid, ultrasonic_done, ultrasonic_sample_valid;
     wire [2:0] ultrasonic_fault;
     // Bench scope mode: 20us pulses every 65ms, even if echo is stuck high.
     Ultrasonic #(.CLK_FREQ(LOGIC_FREQ), .TRIGGER_US(20),
         .TRIGGER_ON_STUCK_ECHO(1)) ultrasonic(
         .clk(logic_clk), .rst(rst), .enable(1'b1), .echo(ultrasonic_echo),
         .trigger(ultrasonic_trigger), .busy(), .distance_mm(ultrasonic_distance_mm),
-        .sample_valid(), .measurement_done(ultrasonic_done),
+        .sample_valid(ultrasonic_sample_valid), .measurement_done(ultrasonic_done),
         .valid(ultrasonic_valid), .fault_code(ultrasonic_fault));
-    // Range acquisition only: never fed to hover or motor commands.
+    // Manual stick remains separate from the selected flight collective.
     wire [9:0] throttle;
     wire throttle_idle = throttle < 10'd10;
     wire signed [10:0] roll_command, pitch_command, yaw_command;
@@ -265,15 +286,39 @@ module BatteryLightsFlightTest #(
         end else if (throttle_idle) idle_seen <= 1;
     end
     wire selection_ready = idle_seen && (sw_sync != 0) && (sw_sync == accepted_selection);
-    wire fc_command_valid, fc_armed, fc_can_arm;
+    wire fc_command_valid, fc_armed, fc_can_arm, fc_imu_fresh;
+    wire signed [15:0] measured_yaw_rate_cdps,yaw_correction_counts,heading_error_cd;
+    wire signed [15:0] measured_pitch_cd,measured_pitch_rate_cdps,pitch_correction_counts;
     wire [10:0] fc_fr, fc_fl, fc_br, fc_bl;
+    wire hover_active,hover_pickup_wait,hover_handover,hover_fault;
+    wire [9:0] hover_throttle;
+    wire [15:0] hover_target_mm;
+    wire [9:0] flight_throttle=hover_active ? hover_throttle : throttle;
+    wire flight_throttle_idle=flight_throttle<10;
+    wire hover_led=ENABLE_HOVER ?
+        ((hover_active && !hover_pickup_wait && !hover_handover && !hover_fault) ||
+         ((hover_active || hover_request || hover_fault) && heartbeat)) : hover_request;
+    generate if(ENABLE_HOVER)begin : g_hover
+        HoverController #(.CLK_FREQ(LOGIC_FREQ),.CONTROL_HZ(CONTROL_HZ),.HANDOVER_MS(HOVER_HANDOVER_MS)) hover (
+            .clk(logic_clk),.rst(rst),.enable(hover_request),.armed(fc_armed),
+            .control_valid(fc_command_valid && sw_sync==4'hf),
+            .attitude_ok(imu_valid && roll_cd>=-1500 && roll_cd<=1500 && pitch_cd>=-1500 && pitch_cd<=1500),
+            .sample_valid(ultrasonic_sample_valid),.range_valid(ultrasonic_valid),
+            .distance_mm(ultrasonic_distance_mm),.manual_throttle(throttle),.control_tick(control_tick),
+            .active(hover_active),.range_fresh(),.throttle_out(hover_throttle),
+            .target_height_mm(hover_target_mm),.vertical_speed_mmps(),.fault(hover_fault),
+            .pickup_wait(hover_pickup_wait),.handover_active(hover_handover));
+    end else begin : g_no_hover
+        assign hover_active=0;assign hover_pickup_wait=0;assign hover_handover=0;assign hover_fault=0;
+        assign hover_throttle=throttle;assign hover_target_mm=0;
+    end endgenerate
     wire signed [15:0] roll_setpoint, pitch_setpoint, yaw_setpoint;
     FlightController #(.CLK_FREQ(LOGIC_FREQ), .FULL_MANUAL_CONTROL(1), .YAW_MIX_SIGN(-1),
         .IMU_TIMEOUT_MS(IMU_TIMEOUT_MS), .MAX_ROLL_CD(MAX_ROLL_CD), .MAX_PITCH_CD(MAX_PITCH_CD),
         .ATTITUDE_KP(ATTITUDE_KP), .RATE_KD(RATE_KD), .YAW_KP(YAW_KP),
-        .YAW_HEADING_HOLD(YAW_HEADING_HOLD)) controller (
+        .YAW_HEADING_HOLD(YAW_HEADING_HOLD), .YAW_HEADING_KP(YAW_HEADING_KP)) controller (
         .clk(logic_clk), .rst(rst), .control_tick(control_tick),
-        .throttle(throttle_idle ? 10'd0 : throttle),
+        .throttle(flight_throttle_idle ? 10'd0 : flight_throttle),
         .roll_command(roll_command), .pitch_command(pitch_command), .yaw_command(yaw_command),
         .arm_request(arm_request), .avoidance_enable(1'b0), .frame_valid(frame_valid),
         .rc_valid(rc_valid && selection_ready), .motor_ready(motor_ready),
@@ -282,9 +327,13 @@ module BatteryLightsFlightTest #(
         .imu_roll_cd(roll_cd), .imu_pitch_cd(pitch_cd),
         .imu_roll_rate_cdps(roll_rate), .imu_pitch_rate_cdps(pitch_rate), .imu_yaw_rate_cdps(yaw_rate),
         .npu_available(1'b0), .npu_action_valid(1'b0), .npu_action(3'd0),
-        .available(), .command_valid(fc_command_valid), .imu_fresh(), .npu_fresh(),
+        .available(), .command_valid(fc_command_valid), .imu_fresh(fc_imu_fresh), .npu_fresh(),
         .motors_armed(fc_armed), .can_arm(fc_can_arm), .avoidance_active(), .applied_action(),
         .roll_setpoint_cd(roll_setpoint), .pitch_setpoint_cd(pitch_setpoint),
+        .measured_yaw_rate_cdps(measured_yaw_rate_cdps),
+        .yaw_correction_counts(yaw_correction_counts),.heading_error_cd(heading_error_cd),
+        .measured_pitch_cd(measured_pitch_cd),.measured_pitch_rate_cdps(measured_pitch_rate_cdps),
+        .pitch_correction_counts(pitch_correction_counts),
         .yaw_rate_setpoint_cdps(yaw_setpoint), .thrust_setpoint(),
         .front_right_throttle(fc_fr), .front_left_throttle(fc_fl),
         .back_right_throttle(fc_br), .back_left_throttle(fc_bl)
@@ -292,7 +341,7 @@ module BatteryLightsFlightTest #(
 
     MotorControl #(.CLK_FREQ(LOGIC_FREQ), .UPDATE_HZ(MOTOR_UPDATE_HZ),
                    .STARTUP_MS(MOTOR_STARTUP_MS)) motors (
-        .clk(logic_clk), .rst(rst), .motors_armed(fc_armed && !throttle_idle && selection_ready),
+        .clk(logic_clk), .rst(rst), .motors_armed(fc_armed && !flight_throttle_idle && selection_ready),
         .command_valid(fc_command_valid && rc_valid && imu_valid),
         .front_right_throttle(sw_sync[3] ? fc_fr : 11'd0),
         .front_left_throttle(sw_sync[1] ? fc_fl : 11'd0),
@@ -307,27 +356,57 @@ module BatteryLightsFlightTest #(
 
     wire signed [31:0] position_x_mm,position_y_mm;
     wire position_calibrated,position_degraded,position_valid;
+    generate if(ENABLE_POSITION_DIAGNOSTICS)begin : g_position
     PositionEstimator #(.CLK_FREQ(LOGIC_FREQ), .TRACK_Z(0)) position_diagnostic(
-        .clk(logic_clk),.rst(rst),.enable(fc_armed && !throttle_idle),
+        .clk(logic_clk),.rst(rst),.enable(fc_armed && !flight_throttle_idle),
         .sample_valid(imu_sample_valid),.imu_valid(imu_valid),.accel_clipped(imu_accel_clipped),
         .accel_x(raw_ax),.accel_y(IMU_MOUNT_FRD ? -raw_ay : raw_ay),
         .accel_z(IMU_MOUNT_FRD ? -raw_az : raw_az),.roll_cd(roll_cd),.pitch_cd(pitch_cd),
         .yaw_rate_cdps(yaw_rate),.calibrated(position_calibrated),.degraded(position_degraded),
         .estimate_valid(position_valid),.x_mm(position_x_mm),.y_mm(position_y_mm),.z_mm(),
         .vx_mmps(),.vy_mmps(),.vz_mmps());
+    end else begin : g_no_position
+        assign position_x_mm=0;assign position_y_mm=0;assign position_valid=0;
+        assign position_calibrated=0;assign position_degraded=0;
+    end endgenerate
     // Diagnostic-only local centimetres, signed and limited to three digits.
-    wire position_view=posx_view || posy_view;
+    wire position_view=ENABLE_POSITION_DIAGNOSTICS && (posx_view || posy_view);
     wire signed [31:0] position_value_mm=posx_view ? position_x_mm : position_y_mm;
     wire [31:0] position_magnitude_mm=position_value_mm[31] ? -position_value_mm : position_value_mm;
     wire [15:0] position_cm=position_magnitude_mm/10>999 ? 16'd999 : position_magnitude_mm/10;
+    // SW4/SW5/SW6 retain yaw speed/correction/heading error. Adding SW8 selects
+    // pitch angle/correction/speed instead (+nose-up). SW8 alone remains roll.
+    wire yaw_diagnostics_view=|yaw_diag_view;
+    wire diag_first_selected=yaw_diag_view[0];
+    wire diag_correction_selected=!diag_first_selected && yaw_diag_view[1];
+    wire diag_pitch_selected=imu_view;
+    wire diag_rate_selected=diag_pitch_selected ? (!diag_first_selected && !diag_correction_selected) : diag_first_selected;
+    wire signed [15:0] yaw_diag_raw=diag_pitch_selected ?
+        (diag_first_selected ? measured_pitch_cd : diag_correction_selected ? pitch_correction_counts : measured_pitch_rate_cdps) :
+        (diag_first_selected ? measured_yaw_rate_cdps : diag_correction_selected ? yaw_correction_counts : heading_error_cd);
+    wire [15:0] yaw_diag_abs=yaw_diag_raw[15] ? -yaw_diag_raw : yaw_diag_raw;
+    wire [16:0] yaw_diag_tenths=({1'b0,yaw_diag_abs}+17'd5)/10;
+    wire [16:0] yaw_diag_whole=({1'b0,yaw_diag_abs}+17'd50)/100;
+    wire yaw_diag_decimal=diag_rate_selected ? yaw_diag_tenths<=999 : !diag_correction_selected;
+    wire [16:0] yaw_diag_number=diag_rate_selected ?
+        (yaw_diag_decimal ? yaw_diag_tenths : yaw_diag_whole) :
+        diag_correction_selected ? {1'b0,yaw_diag_abs} : yaw_diag_tenths;
+    wire diag_measured_selected=diag_rate_selected || (diag_pitch_selected && diag_first_selected);
+    wire yaw_diag_valid=(diag_measured_selected ? fc_imu_fresh : fc_command_valid) && yaw_diag_number<=999;
+    // SW11/SW12 are free when the optional X/Y estimator is excluded.
+    wire rc_roll_view=!ENABLE_POSITION_DIAGNOSTICS && posx_view;
+    wire rc_pitch_view=!ENABLE_POSITION_DIAGNOSTICS && posy_view;
+    wire rc_high_view=rc_roll_view || rc_pitch_view;
+    wire signed [10:0] rc_axis_command=rc_roll_view ? roll_command : rc_pitch_view ? pitch_command : yaw_command;
+    wire [10:0] rc_axis_magnitude=rc_axis_command[10] ? -rc_axis_command : rc_axis_command;
     wire [15:0] roll_magnitude_cd = roll_cd[15] ? (~roll_cd + 16'd1) : roll_cd;
     wire [16:0] roll_degrees = ({1'b0,roll_magnitude_cd}+17'd50)/100;
     wire roll_view_active = imu_view && !error_view && !configuring &&
-                            !position_view && !range_view && !lidar_view && imu_valid;
-    wire [15:0] display_number = position_view ? position_cm : range_view ? ultrasonic_distance_mm :
+                            !yaw_diagnostics_view && !position_view && !rc_high_view && !range_view && !lidar_view && imu_valid;
+    wire [15:0] display_number = yaw_diagnostics_view ? yaw_diag_number[15:0] : position_view ? position_cm : rc_high_view ? {5'd0,rc_axis_magnitude} : range_view ? ultrasonic_distance_mm :
         lidar_view ? lidar_center_mm :
         imu_view ? roll_degrees[15:0] :
-        battery_view ? {6'b0,battery_percent_tenths} : {6'b0,throttle};
+        battery_view ? {6'b0,battery_percent_tenths} : {5'b0,rc_axis_magnitude};
     reg [31:0] bcd;
     integer bit_index, digit_index;
     always @* begin
@@ -347,33 +426,36 @@ module BatteryLightsFlightTest #(
     wire ready_to_arm = imu_valid && imu_calibrated && motor_ready &&
                         rc_valid && selection_ready && throttle_idle;
     wire configuring = (!imu_init_done || !imu_calibrated) && !imu_fault;
-    wire error_present = imu_fault || (!configuring && (!rc_valid || !battery_valid)) || ultrasonic_fault != 0;
+    wire error_present = imu_fault || (!configuring && (!rc_valid || !battery_valid)) || ultrasonic_fault != 0 || hover_fault;
     wire [15:0] error_code = imu_fault ?
         (imu_bus_fault ? {imu_fault_register,imu_fault_observed} : {12'he00,imu_fault_reason}) :
         !configuring && !rc_valid ? 16'he010 :
         !configuring && !battery_valid ? 16'he011 :
-        ultrasonic_fault != 0 ? 16'he030 : 16'he000;
+        ultrasonic_fault != 0 ? 16'he030 : hover_fault ? 16'he031 : 16'he000;
     wire [15:0] display_value = configuring ? 16'hc0f6 :
         error_view ? error_code :
+        yaw_diagnostics_view ? (yaw_diag_valid ? {yaw_diag_raw[15] ? 4'hd : 4'hc,bcd[27:16]} : 16'hffff) :
         position_view ? (position_valid ? bcd[31:16] : 16'hffff) :
+        rc_high_view ? (rc_valid ? {rc_axis_command[10] ? 4'hd : 4'hc,bcd[27:16]} : 16'hffff) :
         range_view ? (ultrasonic_valid ? bcd[31:16] : 16'hffff) :
-        lidar_view ? (lidar_healthy && lidar_center_valid ? bcd[31:16] : 16'hffff) :
+        lidar_view ? (npu_available && npu_command<=4 ? (16'hb100 + {13'd0,npu_command}) : 16'hffff) :
         imu_view ? (imu_valid ? bcd[31:16] : 16'hffff) :
         battery_view ? (battery_valid ? bcd[31:16] : 16'hffff) :
-        throttle_view ? (rc_valid ? bcd[31:16] : 16'hffff) :
+        yaw_view ? (rc_valid ? {rc_axis_command[10] ? 4'hd : 4'hc,bcd[27:16]} : 16'hffff) :
         fc_armed ? 16'ha17d : fc_can_arm ? 16'hadbf : 16'hffff;
     wire battery_view_active = !configuring && !error_view && !range_view &&
-        !position_view && !lidar_view && !imu_view && battery_view && battery_valid;
+        !yaw_diagnostics_view && !position_view && !rc_high_view && !lidar_view && !imu_view && battery_view && battery_valid;
     wire [6:0] display_seg;
     SevenSegmentDisplay #(.CLK_FREQ(LOGIC_FREQ), .REFRESH_HZ(DISPLAY_REFRESH_HZ),
-        .STATUS_WORDS(1)) display (
+        .STATUS_WORDS(1), .RC_AXIS_WORDS(1)) display (
         .clk(logic_clk), .rst(rst), .write(1'b1), .value(display_value),
         .digit_enable(4'b1111),
         .decimal_points(!configuring && error_view && imu_fault ? 4'b0100 :
+                        (!configuring && !error_view && yaw_diagnostics_view && yaw_diag_valid && yaw_diag_decimal) ? 4'b0010 :
                         battery_view_active ? 4'b0010 : 4'b0000),
         .seg(display_seg), .dp(dp), .an(an)
     );
-    wire position_view_active=position_view && position_valid && !rst && !configuring && !error_view;
+    wire position_view_active=position_view && position_valid && !yaw_diagnostics_view && !rst && !configuring && !error_view;
     assign seg = position_view_active && an==4'b0111 ? (position_value_mm[31] ? 7'h3f : 7'h7f) :
         roll_view_active && !rst && an == 4'b0111 ?
         (roll_cd[15] ? 7'h3f : 7'h7f) :
@@ -393,7 +475,7 @@ module BatteryLightsFlightTest #(
     assign led = rst ? 16'b0 : {(fc_armed || (fc_can_arm && heartbeat)),
         (error_view || (error_present && heartbeat)),
         (battery_valid && (!battery_low || heartbeat)),
-        hover_request, ai_override_request, (ultrasonic_valid || heartbeat), (lidar_healthy || heartbeat),
+        hover_led, ai_override_request, (ultrasonic_valid || heartbeat), (lidar_healthy || heartbeat),
         (imu_healthy ? 1'b1 : heartbeat),
         (rc_valid ? 1'b1 : heartbeat), light_sync[0], light_sync[1], light_out[2], (sw_sync | {4{heartbeat}})};
 endmodule
